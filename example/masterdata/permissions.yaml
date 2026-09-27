@@ -1,0 +1,3 @@
+- {role: admin, action: read}
+- {role: admin, action: write}
+- {role: member, action: read}

@@ -1,0 +1,5 @@
+- code: admin
+  name: Administrator
+
+- code: member
+  name: Member

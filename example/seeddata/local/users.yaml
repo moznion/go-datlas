@@ -1,0 +1,9 @@
+- email: alice@example.test
+  company: acme
+  role: admin
+  joined_at: 2024-04-01
+
+- email: bob@example.test
+  company: acme
+  role: member
+  joined_at: 2024-04-01T09:00:00+09:00

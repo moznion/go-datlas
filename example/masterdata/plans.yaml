@@ -1,0 +1,22 @@
+- &free
+  code: free
+  name: Free
+  tier: free
+  price_yen: 0
+  trial: 0s
+  features: [basic]
+  limits:
+    seats: 3
+
+- <<: *free
+  code: pro
+  name: Pro
+  tier: business
+  price_yen: 1200
+  trial: 720h
+  features: [basic, sso]
+  description: |
+    For growing teams.
+  limits:
+    seats: 50
+    storage_gb: 100

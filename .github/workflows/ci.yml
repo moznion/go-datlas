@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  generator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check formatting and go.mod
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          for m in . example; do (cd $m && go mod tidy -diff); done
+      - run: go vet ./...
+      - run: go test -race ./...
+      - uses: dominikh/staticcheck-action@v1
+        with:
+          install-go: false
+
+  example:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: example
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: example/go.mod
+      - name: Check that generated code is up to date
+        run: |
+          (cd fixture && go tool datlas fixture -check ../model)
+          (cd masterdata && go tool datlas master -check)
+          (cd seeddata && go tool datlas seed -check)
+      - run: go vet ./...
+      - run: go test -race ./...
