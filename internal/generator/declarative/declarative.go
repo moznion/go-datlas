@@ -519,7 +519,12 @@ func discover(kind Kind, dataDir string, schemas []namedSchema) ([]*Dataset, err
 			if ignored(e.Name()) {
 				continue
 			}
-			if !e.IsDir() {
+			isDir, err := entryIsDir(dataDir, e)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if !isDir {
 				if isYAML(e.Name()) {
 					errs = append(errs, fmt.Errorf("%s: seed data must be placed in an environment directory such as %s",
 						displayPath(filepath.Join(dataDir, e.Name())), displayPath(filepath.Join(dataDir, "local", e.Name()))))
@@ -636,8 +641,11 @@ func nestedYAML(dir string, datasets map[string]bool, depth int) ([]string, erro
 	}
 	var found []string
 	for _, e := range entries {
-		if !e.IsDir() || ignored(e.Name()) || e.Name() == "testdata" {
+		if ignored(e.Name()) || e.Name() == "testdata" {
 			continue
+		}
+		if isDir, err := entryIsDir(dir, e); err != nil || !isDir {
+			continue // broken links are reported where they matter: environments and data files
 		}
 		sub := filepath.Join(dir, e.Name())
 		if hasGoFiles(sub) {
@@ -675,6 +683,20 @@ func dirLabel(dir string) string {
 	return "the package directory"
 }
 
+// entryIsDir reports whether the entry e of dir is a directory, following symbolic links,
+// so that environments and data files can be shared by linking them.
+func entryIsDir(dir string, e os.DirEntry) (bool, error) {
+	if e.Type()&os.ModeSymlink == 0 {
+		return e.IsDir(), nil
+	}
+	path := filepath.Join(dir, e.Name())
+	st, err := os.Stat(path)
+	if err != nil {
+		return false, fmt.Errorf("%s: broken symbolic link: %w", displayPath(path), err)
+	}
+	return st.IsDir(), nil
+}
+
 // hasGoFiles reports whether dir holds Go files, i.e. is another package.
 func hasGoFiles(dir string) bool {
 	matches, _ := filepath.Glob(filepath.Join(dir, "*.go"))
@@ -697,7 +719,14 @@ func yamlFiles(dir string) ([]string, error) {
 	}
 	var files []string
 	for _, e := range entries {
-		if !e.IsDir() && isYAML(e.Name()) && !ignored(e.Name()) {
+		if !isYAML(e.Name()) || ignored(e.Name()) {
+			continue
+		}
+		isDir, err := entryIsDir(dir, e)
+		if err != nil {
+			return nil, err
+		}
+		if !isDir {
 			files = append(files, e.Name())
 		}
 	}
