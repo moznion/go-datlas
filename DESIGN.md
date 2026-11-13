@@ -715,7 +715,7 @@ Explicitly out of scope:
 - SQL generation
 - migration generation
 - automatic DB synchronization
-- association graph generation
+- association graph generation (fields can only be linked to values the test supplies; see `from` and `ref` in the README)
 - callback system similar to FactoryBot
 
 ---

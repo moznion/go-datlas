@@ -8,6 +8,25 @@ import (
 	"github.com/moznion/go-datlas/example/model"
 )
 
+func TestLinkedFields(t *testing.T) {
+	f := fixture.New(fixture.WithT(t))
+
+	u := f.User()
+	if u.CompanyID != u.Company.ID {
+		t.Fatalf("CompanyID %v does not match Company.ID %v", u.CompanyID, u.Company.ID)
+	}
+
+	a := f.Account()
+	for _, m := range f.Memberships(2, fixture.MembershipAccountIDFrom(a)) {
+		if m.AccountID != a.ID {
+			t.Fatalf("AccountID %v, want %v", m.AccountID, a.ID)
+		}
+	}
+	if f.Membership().AccountID == a.ID {
+		t.Fatal("without the option, AccountID must be generated")
+	}
+}
+
 func TestUniqueCompanyNames(t *testing.T) {
 	f := fixture.New(fixture.WithT(t))
 	seen := map[string]bool{}

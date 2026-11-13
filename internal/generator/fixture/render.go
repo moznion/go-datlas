@@ -16,7 +16,7 @@ const fixturekitPath = "github.com/moznion/go-datlas/fixturekit"
 // identifiers declared or used as locals by the generated code; imports must not shadow them.
 var reservedIdents = []string{
 	"Option", "WithSeed", "WithClock", "WithNow", "WithTimePrecision", "WithT", "Factory", "New",
-	"f", "v", "vs", "i", "n", "opt", "opts", "seed", "clock", "now", "d", "t",
+	"f", "v", "vs", "i", "n", "opt", "opts", "seed", "clock", "now", "d", "t", "src",
 }
 
 // renderer renders the factory methods.
@@ -91,12 +91,27 @@ func (f *Factory) Faker() *%[1]s.Generator {
 		if err := r.writePromoted(&b, ft, ft.Fields); err != nil {
 			return nil, err
 		}
+		// Copies are made once every other field is set, and before opts.
+		for _, leaf := range leaves(ft.Fields) {
+			if leaf.Policy.From == nil {
+				continue
+			}
+			expr, err := r.fieldExpr(ft, leaf)
+			if err != nil {
+				return nil, err
+			}
+			fmt.Fprintf(&b, "v.%s = %s\n", leaf.Access, expr)
+		}
 		b.WriteString("for _, opt := range opts {\nopt(&v)\n}\nreturn v\n}\n")
 
 		fmt.Fprintf(&b, "\n// %s returns n new values built by %s.\n", ft.PluralName, ft.Name)
 		fmt.Fprintf(&b, "func (f *Factory) %s(n int, opts ...func(*%s)) []%s {\n", ft.PluralName, typ, typ)
 		fmt.Fprintf(&b, "vs := make([]%s, n)\n", typ)
 		fmt.Fprintf(&b, "for i := range vs {\nvs[i] = f.%s(opts...)\n}\nreturn vs\n}\n", ft.Name)
+
+		for _, o := range ft.refOptions() {
+			r.writeRefOption(&b, ft, typ, o)
+		}
 	}
 	return output.File(pkgName, im, b.Bytes()), nil
 }
@@ -106,6 +121,9 @@ func (r *renderer) writeFields(b *bytes.Buffer, ft FixtureType, fields []Field) 
 	for _, field := range fields {
 		if field.Promoted {
 			continue // set by writePromoted
+		}
+		if field.Policy.From != nil {
+			continue // copied after the literal
 		}
 		if field.Children != nil {
 			fmt.Fprintf(b, "%s: %s{\n", field.Name, r.im.TypeString(field.Type))
@@ -131,6 +149,9 @@ func (r *renderer) writePromoted(b *bytes.Buffer, ft FixtureType, fields []Field
 		switch {
 		case field.Promoted:
 			for _, leaf := range leaves(field.Children) {
+				if leaf.Policy.From != nil {
+					continue // copied after the literal
+				}
 				expr, err := r.fieldExpr(ft, leaf)
 				if err != nil {
 					return err
@@ -155,18 +176,7 @@ func (r *renderer) fieldExpr(ft FixtureType, field Field) (string, error) {
 		return "", err
 	}
 	if w := field.Policy.Wrap; w != nil {
-		fn := w.Func.Name()
-		if q := im.Add(w.Func.Pkg().Path(), w.Func.Pkg().Name()); q != "" {
-			fn = q + "." + fn
-		}
-		if len(w.TypeArgs) > 0 {
-			args := make([]string, len(w.TypeArgs))
-			for i, t := range w.TypeArgs {
-				args[i] = im.TypeString(t)
-			}
-			fn += "[" + strings.Join(args, ", ") + "]"
-		}
-		expr = fn + "(" + expr + ")"
+		expr = r.wrapCall(w, expr)
 	}
 	if shape.Ptr {
 		expr = kit + ".Ptr(" + expr + ")"
@@ -177,6 +187,41 @@ func (r *renderer) fieldExpr(ft FixtureType, field Field) (string, error) {
 			sliceType, sliceType, shape.Count, expr)
 	}
 	return expr, nil
+}
+
+// wrapCall renders the call of the wrap function w on expr.
+func (r *renderer) wrapCall(w *Wrap, expr string) string {
+	fn := w.Func.Name()
+	if q := r.im.Add(w.Func.Pkg().Path(), w.Func.Pkg().Name()); q != "" {
+		fn = q + "." + fn
+	}
+	if len(w.TypeArgs) > 0 {
+		args := make([]string, len(w.TypeArgs))
+		for i, t := range w.TypeArgs {
+			args[i] = r.im.TypeString(t)
+		}
+		fn += "[" + strings.Join(args, ", ") + "]"
+	}
+	return fn + "(" + expr + ")"
+}
+
+// writeRefOption renders the option function of a field with the ref parameter.
+func (r *renderer) writeRefOption(b *bytes.Buffer, ft FixtureType, typ string, o refOption) {
+	link := o.Field.Policy.Ref
+	src := r.im.TypeString(link.Source.Type())
+	expr := "src." + link.Path
+	if !types.Identical(link.Type, link.Target) {
+		expr = r.im.TypeString(link.Target) + "(" + expr + ")"
+	}
+	if w := o.Field.Policy.Wrap; w != nil {
+		expr = r.wrapCall(w, expr)
+	}
+	if link.Ptr {
+		expr = r.kit + ".Ptr(" + expr + ")"
+	}
+	fmt.Fprintf(b, "\n// %s returns an option of %s that sets %s to the %s of src, a value built by %s.\n",
+		o.Name, ft.Name, o.Field.Name, link.Path, link.Factory)
+	fmt.Fprintf(b, "func %s(src %s) func(*%s) {\nreturn func(v *%s) {\nv.%s = %s\n}\n}\n", o.Name, src, typ, typ, o.Field.Access, expr)
 }
 
 // elemExpr renders the expression generating one value of type t.
@@ -253,6 +298,8 @@ func (r *renderer) elemExpr(ft FixtureType, field Field, t types.Type) (string, 
 		natural = t
 	case "nested":
 		expr, natural = "f."+r.methods[types.Unalias(t).(*types.Named).Obj()]+"()", t
+	case "from":
+		expr, natural = "v."+p.From.Path, p.From.Type
 	case "gen":
 		fn := p.Gen.Name()
 		if q := im.Add(p.Gen.Pkg().Path(), p.Gen.Pkg().Name()); q != "" {

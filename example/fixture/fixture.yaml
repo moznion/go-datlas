@@ -9,3 +9,9 @@ types:
       Plan: oneof=free|pro,wrap=null
       CreatedAt: now
       DeletedAt: "-"
+  - type: github.com/moznion/go-datlas/example/dbgen.InsertMembershipParams
+    name: Membership
+    fields:
+      ID: uuid
+      AccountID: uuid,ref=Account.ID # also generates MembershipAccountIDFrom(account)
+      Role: oneof=owner|member

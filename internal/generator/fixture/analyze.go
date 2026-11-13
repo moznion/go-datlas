@@ -47,6 +47,8 @@ type Field struct {
 	// Promoted is true when the embedded struct cannot be named by the generated package
 	// (an unexported type of another package); its fields are then set through promotion.
 	Promoted bool
+	// Access is the selector of the field relative to the value, e.g. "Timestamps.CreatedAt".
+	Access string
 }
 
 // Shape describes how the generated value is wrapped to fit the field type.
@@ -75,6 +77,10 @@ type GeneratorPolicy struct {
 	// Gen is the custom generator of fixture:"gen=Func", and GenType the type it returns.
 	Gen     *types.Func
 	GenType types.Type
+	// From is the source of fixture:"from=PATH".
+	From *From
+	// Ref is set by the ref parameter.
+	Ref *RefLink
 }
 
 // Wrap is a function that turns a generated value into the value of a field,
@@ -156,6 +162,8 @@ type analyzer struct {
 	fixtures map[*types.TypeName]int
 	// packages are the loaded packages and their dependencies, by import path.
 	packages map[string]*types.Package
+	// factories maps the names of the factory methods to their types, for ref.
+	factories map[string]*types.TypeName
 }
 
 // analyze turns fixture targets into the intermediate representation.
@@ -168,9 +176,15 @@ func analyze(targets []target, outPkgPath string, enums *loader.Enums, reserved 
 		enums:      enums,
 		fixtures:   map[*types.TypeName]int{},
 		packages:   map[string]*types.Package{},
+		factories:  map[string]*types.TypeName{},
 	}
 	for _, t := range targets {
 		a.fixtures[t.Type]++
+		name := t.Type.Name()
+		if t.Name != "" {
+			name = t.Name
+		}
+		a.factories[name] = t.Type
 	}
 	var addPkg func(p *types.Package)
 	addPkg = func(p *types.Package) {
@@ -236,8 +250,12 @@ func analyze(targets []target, outPkgPath string, enums *loader.Enums, reserved 
 				continue
 			}
 		}
-		fields, ferrs := a.fields(&t, t.Struct, t.Type.Name(), samePkg)
+		fields, ferrs := a.fields(&t, t.Struct, t.Type.Name(), "", samePkg)
 		if len(ferrs) > 0 {
+			errs = append(errs, ferrs...)
+			continue
+		}
+		if ferrs := checkFromChains(t, fields); len(ferrs) > 0 {
 			errs = append(errs, ferrs...)
 			continue
 		}
@@ -302,8 +320,9 @@ func parseOptions(args []string, allowed ...string) (map[string]string, error) {
 	return opts, nil
 }
 
-// fields analyzes the fields of st; path names st in error messages.
-func (a *analyzer) fields(t *target, st *types.Struct, path string, samePkg bool) ([]Field, []error) {
+// fields analyzes the fields of st; path names st in error messages, and access is the selector
+// of st relative to the value ("" for the value itself, "Timestamps." for an embedded struct).
+func (a *analyzer) fields(t *target, st *types.Struct, path, access string, samePkg bool) ([]Field, []error) {
 	var (
 		fields []Field
 		errs   []error
@@ -331,7 +350,11 @@ func (a *analyzer) fields(t *target, st *types.Struct, path string, samePkg bool
 				continue
 			}
 			promoted := !samePkg && !isNameable(v.Type(), a.outPkgPath)
-			children, cerrs := a.fields(t, inner, path+"."+v.Name(), samePkg)
+			childAccess := access + v.Name() + "."
+			if promoted {
+				childAccess = "" // set through promotion, by the name of the field alone
+			}
+			children, cerrs := a.fields(t, inner, path+"."+v.Name(), childAccess, samePkg)
 			if len(cerrs) > 0 {
 				errs = append(errs, cerrs...)
 				continue
@@ -348,7 +371,7 @@ func (a *analyzer) fields(t *target, st *types.Struct, path string, samePkg bool
 					}
 				}
 			}
-			fields = append(fields, Field{Name: v.Name(), Type: v.Type(), Children: children, Promoted: promoted})
+			fields = append(fields, Field{Name: v.Name(), Type: v.Type(), Children: children, Promoted: promoted, Access: access + v.Name()})
 			continue
 		}
 		if err := loader.CheckType(t.Package, v.Type(), ctx); err != nil {
@@ -381,7 +404,27 @@ func (a *analyzer) fields(t *target, st *types.Struct, path string, samePkg bool
 		}
 		_, hasCount := policy.Params["count"]
 		_, hasWrap := policy.Params["wrap"]
-		if policy.Gen != nil && !hasCount && !hasWrap && types.AssignableTo(policy.GenType, v.Type()) {
+		if policy.Generator == "from" {
+			if hasCount {
+				errs = append(errs, fmt.Errorf("%s: parameter \"count\" cannot be combined with \"from\"", ctx))
+				continue
+			}
+			if len(policy.Candidates) != 1 {
+				errs = append(errs, fmt.Errorf("%s: fixture generator \"from\" takes one field path, e.g. from=Company.ID", ctx))
+				continue
+			}
+			typ, first, err := a.resolvePath(t.Type.Type(), policy.Candidates[0])
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", ctx, err))
+				continue
+			}
+			policy.From = &From{Path: policy.Candidates[0], Type: typ, First: first}
+		}
+		if policy.From != nil && !hasWrap {
+			if shape, err = linkShape(policy.From.Type, v.Type()); err != nil {
+				err = fmt.Errorf("field %s is %s, which cannot be assigned to %s", policy.From.Path, policy.From.Type, v.Type())
+			}
+		} else if policy.Gen != nil && !hasCount && !hasWrap && types.AssignableTo(policy.GenType, v.Type()) {
 			// The function builds the whole field, e.g. a slice or a map.
 			shape.Elem = v.Type()
 		} else if ref, ok := policy.Params["wrap"]; ok {
@@ -403,7 +446,13 @@ func (a *analyzer) fields(t *target, st *types.Struct, path string, samePkg bool
 			errs = append(errs, fmt.Errorf("%s: %w", ctx, err))
 			continue
 		}
-		fields = append(fields, Field{Name: v.Name(), Var: v, Type: v.Type(), Shape: shape, Policy: policy})
+		if ref, ok := policy.Params["ref"]; ok {
+			if policy.Ref, err = a.resolveRef(ref, policy, shape, v.Type()); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", ctx, err))
+				continue
+			}
+		}
+		fields = append(fields, Field{Name: v.Name(), Var: v, Type: v.Type(), Shape: shape, Policy: policy, Access: access + v.Name()})
 	}
 	return fields, errs
 }
@@ -592,6 +641,9 @@ func parseTag(tag string) (GeneratorPolicy, error) {
 		if p.Generator == "gen" {
 			return p, fmt.Errorf("fixture generator \"gen\" requires a function, e.g. gen=example.com/app/fake.SKU")
 		}
+		if p.Generator == "from" {
+			return p, fmt.Errorf("fixture generator \"from\" requires a field path, e.g. from=Company.ID")
+		}
 		return p, fmt.Errorf("fixture generator %q requires candidates, e.g. %s=a|b", p.Generator, p.Generator)
 	}
 	if !spec.needsArg && hasArg {
@@ -612,7 +664,7 @@ func parseTag(tag string) (GeneratorPolicy, error) {
 		if !ok || k == "" {
 			return p, fmt.Errorf("malformed fixture tag parameter %q: expected key=value", kv)
 		}
-		if !spec.params[k] && k != "count" && k != "wrap" {
+		if !spec.params[k] && k != "count" && k != "wrap" && k != "ref" {
 			return p, fmt.Errorf("fixture generator %q does not accept parameter %q", p.Generator, k)
 		}
 		if _, dup := p.Params[k]; dup {
@@ -706,6 +758,15 @@ func isTime(t types.Type) bool {
 func (a *analyzer) validate(p GeneratorPolicy, elem types.Type) (GeneratorPolicy, error) {
 	spec := generators[p.Generator]
 	kind, basic := classify(elem)
+	if p.Generator == "from" {
+		if p.Unique {
+			return p, fmt.Errorf("fixture generator \"from\" cannot be combined with \"unique\"")
+		}
+		if !types.AssignableTo(p.From.Type, elem) {
+			return p, fmt.Errorf("field %s is %s, which cannot be assigned to %s", p.From.Path, p.From.Type, elem)
+		}
+		return p, nil
+	}
 	if p.Unique && !types.Comparable(elem) {
 		return p, fmt.Errorf("\"unique\" requires a comparable type, not %s", elem)
 	}
@@ -812,6 +873,7 @@ var generators = map[string]generatorSpec{
 	"nested":     {kinds: kinds(kindFixture)},
 	"enum":       {kinds: kinds(kindString, kindSigned, kindUnsigned)},
 	"gen":        {needsArg: true}, // any type the function returns
+	"from":       {needsArg: true}, // the type of the source field
 }
 
 func generatorNames() []string {
