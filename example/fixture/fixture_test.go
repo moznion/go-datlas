@@ -8,6 +8,17 @@ import (
 	"github.com/moznion/go-datlas/example/model"
 )
 
+func TestUniqueCompanyNames(t *testing.T) {
+	f := fixture.New(fixture.WithT(t))
+	seen := map[string]bool{}
+	for _, c := range f.Companies(20) {
+		if seen[c.Name] {
+			t.Fatalf("duplicate company name %q", c.Name)
+		}
+		seen[c.Name] = true
+	}
+}
+
 func TestFactory(t *testing.T) {
 	now := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	f := fixture.New(fixture.WithSeed(42), fixture.WithNow(now), fixture.WithT(t))

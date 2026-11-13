@@ -99,6 +99,13 @@ Tags (`fixture:"generator,param=value,..."`):
 | `nested` | a `//datlas:fixture` type; builds it with its factory method | |
 | `enum` | a `//datlas:enum` type; picks one of its constants | |
 
+- `unique` makes the values of a field distinct within a factory: `fixture:"word,unique"`. The value is
+  drawn again while it repeats an earlier one, so it suits generators with many values (`uuid`, `alphanum`,
+  wide `int` ranges, `past`, ...). Generators with few values run out: `word` has 26, `first_name` 20,
+  `oneof` and `enum` as many as their candidates, and generating more panics with the field name.
+  Factories of the same type (`User`, `AdminUser`) share the values, like `seq`. `email`, `username` and
+  `seq` are always unique; `now` and `bool` cannot be unique. Hand-written methods can use
+  `fixturekit.Unique(f.Faker(), "key", f.Faker().Word)`.
 - Named types (`type Status string`), pointers (`*T`) and slices (`[]T`, `[]*T`) of supported types work.
   Slices take `count=N` (default 1).
 - `oneof` candidates of a `//datlas:enum` type must be constants of that type.

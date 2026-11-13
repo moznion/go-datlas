@@ -91,7 +91,7 @@ func (f *Factory) Users(n int, opts ...func(*model.User)) []model.User {
 func (f *Factory) Company(opts ...func(*model.Company)) model.Company {
 	v := model.Company{
 		ID:   model.UUID(f.g.UUID()),
-		Name: f.g.Word(),
+		Name: fixturekit.Unique(f.g, "github.com/moznion/go-datlas/example/model.Company.Name", func() string { return f.g.Word() }),
 	}
 	for _, opt := range opts {
 		opt(&v)

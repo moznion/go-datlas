@@ -109,3 +109,40 @@ func TestStaleFactoryRemoval(t *testing.T) {
 		t.Fatal("stale factory was not removed")
 	}
 }
+
+func TestUnique(t *testing.T) {
+	model := "package model\n\n//datlas:fixture\ntype T struct {\n" +
+		"\tName  string    `fixture:\"word,unique\"`\n" +
+		"\tCode  *int      `fixture:\"int,max=99,unique\"`\n" +
+		"\tTags  []string  `fixture:\"oneof=a|b|c,count=2,unique\"`\n" +
+		"\tKind  Kind      `fixture:\"word,unique\"`\n" +
+		"}\n\ntype Kind string\n"
+	_, src, err := generateModel(t, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contains(t, src,
+		`Name: fixturekit.Unique(f.g, "example.com/datlastest/model.T.Name", func() string { return f.g.Word() }),`,
+		`Code: fixturekit.Ptr(fixturekit.Unique(f.g, "example.com/datlastest/model.T.Code", func() int { return int(f.g.Int64Range(1, 99)) })),`,
+		`vs[i] = fixturekit.Unique(f.g, "example.com/datlastest/model.T.Tags", func() string { return []string{"a", "b", "c"}[f.g.IntN(3)] })`,
+		`Kind: fixturekit.Unique(f.g, "example.com/datlastest/model.T.Kind", func() model.Kind { return model.Kind(f.g.Word()) }),`,
+	)
+}
+
+func TestUniqueErrors(t *testing.T) {
+	for tag, want := range map[string]string{
+		"email,unique":       `fixture generator "email" is always unique`,
+		"seq,unique":         `fixture generator "seq" is always unique`,
+		"word,unique,unique": `duplicate fixture tag parameter "unique"`,
+		"word,unique=true":   `fixture generator "word" does not accept parameter "unique"`,
+	} {
+		_, _, err := generateModel(t, "package model\n\n//datlas:fixture\ntype T struct {\n\tA string `fixture:\""+tag+"\"`\n}\n")
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error %v does not contain %q", tag, err, want)
+		}
+	}
+	_, _, err := generateModel(t, "package model\n\n//datlas:fixture\ntype T struct {\n\tA bool `fixture:\"bool,unique\"`\n}\n")
+	if err == nil || !strings.Contains(err.Error(), `fixture generator "bool" cannot be combined with "unique"`) {
+		t.Errorf("bool: unexpected error %v", err)
+	}
+}

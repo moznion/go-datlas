@@ -260,6 +260,12 @@ func (r *renderer) elemExpr(ft FixtureType, field Field, t types.Type) (string, 
 	if !types.Identical(natural, t) {
 		expr = im.TypeString(t) + "(" + expr + ")"
 	}
+	if p.Unique {
+		// The key is shared by the factories of the type (e.g. User and AdminUser), like seq.
+		key := strconv.Quote(ft.Type.Pkg().Path() + "." + ft.Type.Name() + "." + field.Name)
+		typ := im.TypeString(t)
+		expr = fmt.Sprintf("%s.Unique(f.g, %s, func() %s { return %s })", r.kit, key, typ, expr)
+	}
 	return expr, nil
 }
 

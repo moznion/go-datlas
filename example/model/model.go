@@ -39,5 +39,5 @@ type User struct {
 //datlas:fixture
 type Company struct {
 	ID   UUID   `fixture:"uuid"`
-	Name string `fixture:"word"`
+	Name string `fixture:"word,unique"`
 }
