@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # Actions are pinned to commit SHAs; Dependabot updates the SHA and its version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  # The example module resolves go-datlas to the repository root, so both modules share
+  # their dependency versions and must be updated together for `go mod tidy -diff` to pass.
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /example
+    schedule:
+      interval: weekly
+    groups:
+      go-modules:
+        patterns: ["*"]
+    commit-message:
+      prefix: deps
