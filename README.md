@@ -223,6 +223,22 @@ Key fields must be fields of the schema or of a struct inlined into it (`yaml:",
 Lookup function names use the singular form of the dataset name. Override it when the guess is wrong:
 `//datlas:master people singular=Person` generates `PersonByCode`.
 
+Datasets with a single-field key of a string or integer type also get a constant per record, so
+application code refers to keys without string literals and a removed key fails to compile:
+
+```go
+const (
+	RoleCodeAdmin  string = "admin"  // <singular><key field><value>
+	RoleCodeMember string = "member" // "read-only" -> RoleCodeReadOnly, -1 -> LevelIDMinus1
+)
+```
+
+Keys of `//datlas:enum` types (which already have constants) and of `encoding.TextUnmarshaler` types
+get none. Two values yielding the same name (`read-only`, `read_only`) fail generation; disable the
+constants of a dataset with `//datlas:master roles consts=false`.
+
+`MasterDatasets()` returns the dataset names in dependency order (see [Applying order](#applying-order)).
+
 ## Seed Data
 
 ```go
@@ -246,8 +262,9 @@ func LocalUserByEmail(key string) (UserSeed, bool)
 func DemoUsers() []UserSeed
 func DemoUserByEmail(key string) (UserSeed, bool)
 
+func SeedDatasets() []string                      // ["companies", "users"], in dependency order
 func SeedEnvironments() []string                  // ["demo", "local"]
-type SeedSet struct{ Users []UserSeed; ... }      // one field per dataset
+type SeedSet struct{ Companies []CompanySeed; Users []UserSeed } // fields in dependency order
 func SeedFor(env string) (SeedSet, bool)          // for ApplySeedData(ctx, env)
 ```
 
@@ -264,6 +281,18 @@ Map keys cannot be references.
 - A seed data reference points at seed data of the same environment.
 - `ref=<import path>.<dataset>` points at master data in another package. That package must be
   generated first (`datlas master`), because the keys are read from its generated code.
+
+## Applying order
+
+`MasterDatasets()` and `SeedDatasets()` list the dataset names in dependency order: every dataset
+comes after the datasets of the same package it refers to, so inserting them in this order satisfies
+foreign keys. The fields of `SeedSet` follow the same order.
+
+- Datasets without an order between them are in name order.
+- Datasets referring to each other in a cycle are adjacent, in name order (insert them with deferred
+  constraints, or in two passes).
+- References of a dataset to itself are ignored: order its records in the YAML file.
+- References to master data of another package are ignored: apply master data before seed data.
 
 ## Enums
 

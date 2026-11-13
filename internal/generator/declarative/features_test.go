@@ -359,7 +359,7 @@ func TestSeedEnvironments(t *testing.T) {
 		"Users []UserSeed",
 		"Events []EventSeed",
 		"func SeedFor(env string) (SeedSet, bool) {",
-		`case "demo": return SeedSet{ Users: DemoUsers(), Events: DemoEvents(), }, true`,
+		`case "demo": return SeedSet{ Events: DemoEvents(), Users: DemoUsers(), }, true`,
 		// The demo environment has no events.yaml, but gets an empty accessor for symmetry.
 		`func DemoEvents() []EventSeed { return []EventSeed{} }`,
 	)
