@@ -70,6 +70,8 @@ type GeneratorPolicy struct {
 	Params   map[string]string
 	// Wrap, when not nil, is applied to the generated value to build the field.
 	Wrap *Wrap
+	// Unique is set by the "unique" flag: values are distinct within the factory for the type and field.
+	Unique bool
 }
 
 // Wrap is a function that turns a generated value into the value of a field,
@@ -578,6 +580,13 @@ func parseTag(tag string) (GeneratorPolicy, error) {
 		p.Candidates = splitEscaped(arg, '|')
 	}
 	for _, kv := range parts[1:] {
+		if strings.TrimSpace(kv) == "unique" {
+			if p.Unique {
+				return p, fmt.Errorf("duplicate fixture tag parameter %q", "unique")
+			}
+			p.Unique = true
+			continue
+		}
 		k, v, ok := strings.Cut(strings.TrimSpace(kv), "=")
 		if !ok || k == "" {
 			return p, fmt.Errorf("malformed fixture tag parameter %q: expected key=value", kv)
@@ -688,6 +697,14 @@ func (a *analyzer) validate(p GeneratorPolicy, elem types.Type) (GeneratorPolicy
 	}
 	if !spec.kinds[kind] {
 		return p, fmt.Errorf("fixture generator %q cannot produce a value of type %s", p.Generator, elem)
+	}
+	if p.Unique {
+		switch p.Generator {
+		case "email", "username", "seq":
+			return p, fmt.Errorf("fixture generator %q is always unique; remove \"unique\"", p.Generator)
+		case "now", "bool":
+			return p, fmt.Errorf("fixture generator %q cannot be combined with \"unique\": it has too few distinct values", p.Generator)
+		}
 	}
 	enum, isEnum, err := a.enums.Lookup(elem)
 	if err != nil {

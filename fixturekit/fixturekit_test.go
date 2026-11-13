@@ -3,6 +3,7 @@ package fixturekit
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,4 +157,34 @@ func TestUniqueAcrossGenerators(t *testing.T) {
 	if a.Email() != b.Email() {
 		t.Fatal("same seed must give the same email")
 	}
+}
+
+func TestUnique(t *testing.T) {
+	g := New(WithSeed(1))
+	seen := map[string]bool{}
+	for range len(words) {
+		w := Unique(g, "k", g.Word)
+		if seen[w] {
+			t.Fatalf("duplicate value %q", w)
+		}
+		seen[w] = true
+	}
+	// Keys are independent.
+	Unique(g, "other", g.Word)
+
+	// Same seed, same sequence.
+	a, b := New(WithSeed(7)), New(WithSeed(7))
+	for range 10 {
+		if x, y := Unique(a, "k", a.Word), Unique(b, "k", b.Word); x != y {
+			t.Fatalf("same seed produced different values: %q != %q", x, y)
+		}
+	}
+
+	defer func() {
+		msg, _ := recover().(string)
+		if !strings.Contains(msg, "no unique value for k after 1000 attempts (26 values already generated)") {
+			t.Fatalf("unexpected panic: %q", msg)
+		}
+	}()
+	Unique(g, "k", g.Word) // the word list is exhausted
 }

@@ -90,6 +90,7 @@ type Generator struct {
 	clock     func() time.Time
 	precision time.Duration
 	seqs      map[string]int64
+	seen      map[string]map[any]struct{}
 	unique    int64
 	// token is derived from the seed and makes unique values of different generators distinct.
 	token string
@@ -131,6 +132,7 @@ func New(opts ...Option) *Generator {
 		clock:     c.clock,
 		precision: c.precision,
 		seqs:      map[string]int64{},
+		seen:      map[string]map[any]struct{}{},
 	}
 	g.token = g.chars(tokenChars, tokenLength)
 	return g
@@ -224,6 +226,38 @@ func (g *Generator) Seq(key string) int64 {
 	defer g.mu.Unlock()
 	g.seqs[key]++
 	return g.seqs[key]
+}
+
+// UniqueAttempts is the number of values Unique draws before giving up.
+const UniqueAttempts = 1000
+
+// Unique returns a value of gen that g has not returned before for key.
+// It draws again while gen returns a value already returned, and panics after UniqueAttempts
+// draws, which happens when the values of gen are exhausted (e.g. a word list or a small range).
+// Generated factories use the type and field as key, e.g. "example.com/app/model.Company.Name".
+func Unique[T comparable](g *Generator, key string, gen func() T) T {
+	for range UniqueAttempts {
+		v := gen()
+		g.mu.Lock()
+		seen := g.seen[key]
+		if seen == nil {
+			seen = map[any]struct{}{}
+			g.seen[key] = seen
+		}
+		_, dup := seen[v]
+		if !dup {
+			seen[v] = struct{}{}
+		}
+		g.mu.Unlock()
+		if !dup {
+			return v
+		}
+	}
+	g.mu.Lock()
+	n := len(g.seen[key])
+	g.mu.Unlock()
+	panic(fmt.Sprintf("fixturekit: no unique value for %s after %d attempts (%d values already generated); "+
+		"its generator has run out of distinct values: widen it, or use seq", key, UniqueAttempts, n))
 }
 
 // nextUnique returns a number that is unique within the generator.
