@@ -98,13 +98,14 @@ Tags (`fixture:"generator,param=value,..."`):
 | `oneof=a\|b\|c` | string, integer, float and bool types | |
 | `nested` | a `//datlas:fixture` type; builds it with its factory method | |
 | `enum` | a `//datlas:enum` type; picks one of its constants | |
+| `gen=FUNC` | any type `FUNC` returns (see [Custom generators](#custom-generators)) | |
 
 - `unique` makes the values of a field distinct within a factory: `fixture:"word,unique"`. The value is
   drawn again while it repeats an earlier one, so it suits generators with many values (`uuid`, `alphanum`,
   wide `int` ranges, `past`, ...). Generators with few values run out: `word` has 26, `first_name` 20,
   `oneof` and `enum` as many as their candidates, and generating more panics with the field name.
   Factories of the same type (`User`, `AdminUser`) share the values, like `seq`. `email`, `username` and
-  `seq` are always unique; `now` and `bool` cannot be unique. Hand-written methods can use
+  `seq` are always unique; `now` and `bool` cannot be unique. With `gen`, the type must be comparable. Hand-written methods can use
   `fixturekit.Unique(f.Faker(), "key", f.Faker().Word)`.
 - Named types (`type Status string`), pointers (`*T`) and slices (`[]T`, `[]*T`) of supported types work.
   Slices take `count=N` (default 1).
@@ -175,6 +176,29 @@ func nullString(s string) sql.NullString { return sql.NullString{String: s, Vali
 
 func null[T any](v T) sql.Null[T] { return sql.Null[T]{V: v, Valid: true} }
 ```
+
+### Custom generators
+
+`gen=FUNC` calls `FUNC`, a `func(*fixturekit.Generator) T`, for values the built-in generators do not
+cover: domain formats, maps, `time.Duration`, ...
+
+```go
+// fake/fake.go
+func SKU(g *fixturekit.Generator) string { return "SKU-" + g.AlphaNum(8) }
+
+func Labels(g *fixturekit.Generator) map[string]string { return map[string]string{"team": g.Word()} }
+```
+
+```go
+SKU    string            `fixture:"gen=example.com/app/fake.SKU"`
+Labels map[string]string `fixture:"gen=example.com/app/fake.Labels"`
+```
+
+- `FUNC` is resolved like the function of `wrap`: `import/path.Func`, or `Func` for a function of the
+  output package. It must not be generic. Using the `Generator` keeps the values deterministic under a seed.
+- When `T` is assignable to the field, `FUNC` builds the whole field (a slice, a pointer, a map, ...).
+  Otherwise the field is decomposed as usual and `T` must be assignable to its element:
+  `[]string` with `gen=...,count=3` calls `FUNC` three times. `wrap` takes the value `FUNC` returns.
 
 ### Hand-written factory methods
 

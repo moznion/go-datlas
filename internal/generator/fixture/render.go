@@ -253,6 +253,12 @@ func (r *renderer) elemExpr(ft FixtureType, field Field, t types.Type) (string, 
 		natural = t
 	case "nested":
 		expr, natural = "f."+r.methods[types.Unalias(t).(*types.Named).Obj()]+"()", t
+	case "gen":
+		fn := p.Gen.Name()
+		if q := im.Add(p.Gen.Pkg().Path(), p.Gen.Pkg().Name()); q != "" {
+			fn = q + "." + fn
+		}
+		expr, natural = fn+"(f.g)", p.GenType
 	default:
 		return "", fmt.Errorf("unknown fixture generator %q", p.Generator)
 	}

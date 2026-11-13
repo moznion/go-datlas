@@ -72,6 +72,9 @@ type GeneratorPolicy struct {
 	Wrap *Wrap
 	// Unique is set by the "unique" flag: values are distinct within the factory for the type and field.
 	Unique bool
+	// Gen is the custom generator of fixture:"gen=Func", and GenType the type it returns.
+	Gen     *types.Func
+	GenType types.Type
 }
 
 // Wrap is a function that turns a generated value into the value of a field,
@@ -366,7 +369,22 @@ func (a *analyzer) fields(t *target, st *types.Struct, path string, samePkg bool
 			continue
 		}
 		var shape Shape
-		if ref, ok := policy.Params["wrap"]; ok {
+		if policy.Generator == "gen" {
+			if len(policy.Candidates) != 1 {
+				errs = append(errs, fmt.Errorf("%s: fixture generator \"gen\" takes one function, e.g. gen=example.com/app/fake.SKU", ctx))
+				continue
+			}
+			if policy.Gen, policy.GenType, err = a.resolveGen(policy.Candidates[0]); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", ctx, err))
+				continue
+			}
+		}
+		_, hasCount := policy.Params["count"]
+		_, hasWrap := policy.Params["wrap"]
+		if policy.Gen != nil && !hasCount && !hasWrap && types.AssignableTo(policy.GenType, v.Type()) {
+			// The function builds the whole field, e.g. a slice or a map.
+			shape.Elem = v.Type()
+		} else if ref, ok := policy.Params["wrap"]; ok {
 			// The wrap function builds the whole field, so the field is not decomposed into
 			// slices or pointers: wrapper types such as go-optional's Option are slices themselves.
 			if _, ok := policy.Params["count"]; ok {
@@ -571,6 +589,9 @@ func parseTag(tag string) (GeneratorPolicy, error) {
 		return p, fmt.Errorf("unknown fixture generator %q (available: %s)", p.Generator, strings.Join(generatorNames(), ", "))
 	}
 	if spec.needsArg && (!hasArg || arg == "") {
+		if p.Generator == "gen" {
+			return p, fmt.Errorf("fixture generator \"gen\" requires a function, e.g. gen=example.com/app/fake.SKU")
+		}
 		return p, fmt.Errorf("fixture generator %q requires candidates, e.g. %s=a|b", p.Generator, p.Generator)
 	}
 	if !spec.needsArg && hasArg {
@@ -685,6 +706,15 @@ func isTime(t types.Type) bool {
 func (a *analyzer) validate(p GeneratorPolicy, elem types.Type) (GeneratorPolicy, error) {
 	spec := generators[p.Generator]
 	kind, basic := classify(elem)
+	if p.Unique && !types.Comparable(elem) {
+		return p, fmt.Errorf("\"unique\" requires a comparable type, not %s", elem)
+	}
+	if p.Generator == "gen" {
+		if !types.AssignableTo(p.GenType, elem) {
+			return p, fmt.Errorf("gen function %s returns %s, which cannot be assigned to %s", p.Candidates[0], p.GenType, elem)
+		}
+		return p, nil
+	}
 	if p.Generator == "nested" {
 		named, ok := types.Unalias(elem).(*types.Named)
 		if !ok || a.fixtures[named.Obj()] == 0 {
@@ -781,6 +811,7 @@ var generators = map[string]generatorSpec{
 	"oneof":      {kinds: kinds(kindString, kindSigned, kindUnsigned, kindFloat, kindBool), needsArg: true},
 	"nested":     {kinds: kinds(kindFixture)},
 	"enum":       {kinds: kinds(kindString, kindSigned, kindUnsigned)},
+	"gen":        {needsArg: true}, // any type the function returns
 }
 
 func generatorNames() []string {
