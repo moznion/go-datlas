@@ -9,8 +9,8 @@ jobs:
   generator:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: Check formatting and go.mod
@@ -19,8 +19,9 @@ jobs:
           for m in . example; do (cd $m && go mod tidy -diff); done
       - run: go vet ./...
       - run: go test -race ./...
-      - uses: dominikh/staticcheck-action@v1
+      - uses: dominikh/staticcheck-action@9716614d4101e79b4340dd97b10e54d68234e431 # v1.4.1
         with:
+          version: "2026.2.2"
           install-go: false
 
   example:
@@ -29,8 +30,8 @@ jobs:
       run:
         working-directory: example
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: example/go.mod
       - name: Check that generated code is up to date
