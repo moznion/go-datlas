@@ -146,3 +146,132 @@ func TestUniqueErrors(t *testing.T) {
 		t.Errorf("bool: unexpected error %v", err)
 	}
 }
+
+func TestCustomGenerator(t *testing.T) {
+	dir := testutil.WriteTree(t, map[string]string{
+		"fake/fake.go": `package fake
+
+import (
+	"time"
+
+	"github.com/moznion/go-datlas/fixturekit"
+)
+
+type SKU string
+
+func NewSKU(g *fixturekit.Generator) SKU { return SKU("SKU-" + g.AlphaNum(8)) }
+
+func Code(g *fixturekit.Generator) string { return g.Alpha(4) }
+
+func Labels(g *fixturekit.Generator) map[string]string { return map[string]string{"k": g.Word()} }
+
+func TTL(g *fixturekit.Generator) time.Duration { return time.Duration(g.Int64Range(1, 60)) * time.Second }
+`,
+		"model/model.go": `package model
+
+import (
+	"database/sql"
+	"time"
+
+	"example.com/datlastest/fake"
+)
+
+//datlas:fixture
+type Item struct {
+	SKU    fake.SKU          ` + "`fixture:\"gen=example.com/datlastest/fake.NewSKU\"`" + `
+	Codes  []string          ` + "`fixture:\"gen=example.com/datlastest/fake.Code,count=2\"`" + `
+	Alt    *string           ` + "`fixture:\"gen=example.com/datlastest/fake.Code\"`" + `
+	Labels map[string]string ` + "`fixture:\"gen=example.com/datlastest/fake.Labels\"`" + `
+	TTL    time.Duration     ` + "`fixture:\"gen=example.com/datlastest/fake.TTL\"`" + `
+	Note   sql.NullString    ` + "`fixture:\"gen=example.com/datlastest/fake.Code,wrap=nullString\"`" + `
+	Local  string            ` + "`fixture:\"gen=local\"`" + `
+}
+`,
+		"fx/helpers.go": `package fx
+
+import (
+	"database/sql"
+
+	"github.com/moznion/go-datlas/fixturekit"
+)
+
+func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
+
+func local(g *fixturekit.Generator) string { return g.Word() }
+`,
+	})
+	path, err := run(Config{Dir: dir, Patterns: []string{"./model", "./fake"}, OutDir: "fx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.TypeCheck(t, dir, "./...")
+	contains(t, testutil.ReadFile(t, path),
+		`SKU: fake.NewSKU(f.g),`,
+		`vs[i] = fake.Code(f.g)`,
+		`Alt: fixturekit.Ptr(fake.Code(f.g)),`,
+		`Labels: fake.Labels(f.g),`,
+		`TTL: fake.TTL(f.g),`,
+		`Note: nullString(fake.Code(f.g)),`,
+		`Local: local(f.g),`,
+	)
+}
+
+func TestCustomGeneratorErrors(t *testing.T) {
+	model := func(field string) string {
+		return "package model\n\nimport \"github.com/moznion/go-datlas/fixturekit\"\n\n" +
+			"func Bad(n int) string { return \"\" }\n\n" +
+			"func Num(g *fixturekit.Generator) int { return 1 }\n\n" +
+			"func Gen[T any](g *fixturekit.Generator) T { var v T; return v }\n\n" +
+			"//datlas:fixture\ntype T struct {\n\t" + field + "\n}\n"
+	}
+	for field, want := range map[string]string{
+		"A string `fixture:\"gen\"`":                                            `fixture generator "gen" requires a function`,
+		"A string `fixture:\"gen=a|b\"`":                                        `fixture generator "gen" takes one function`,
+		"A string `fixture:\"gen=Missing\"`":                                    "gen function Missing is not declared in the output package",
+		"A string `fixture:\"gen=example.com/datlastest/model.Bad\"`":           "gen function example.com/datlastest/model.Bad must be func(*fixturekit.Generator) T",
+		"A string `fixture:\"gen=example.com/datlastest/model.Num\"`":           "gen function example.com/datlastest/model.Num returns int, which cannot be assigned to string",
+		"A []string `fixture:\"gen=example.com/datlastest/model.Num,count=2\"`": "returns int, which cannot be assigned to string",
+		"A string `fixture:\"gen=example.com/datlastest/model.Gen\"`":           "must not be generic",
+	} {
+		_, _, err := generateModel(t, model(field))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error %v does not contain %q", field, err, want)
+		}
+	}
+}
+
+func TestCustomGeneratorInPolicyFile(t *testing.T) {
+	dir := testutil.WriteTree(t, map[string]string{
+		"gen/gen.go": "package gen\n\ntype Row struct {\n\tCode string\n}\n",
+		"fake/fake.go": "package fake\n\nimport \"github.com/moznion/go-datlas/fixturekit\"\n\n" +
+			"func Code(g *fixturekit.Generator) string { return g.Alpha(4) }\n",
+		"fx/fixture.yaml": "types:\n  - type: example.com/datlastest/gen.Row\n    fields:\n      Code: gen=example.com/datlastest/fake.Code\n",
+	})
+	// The package of the gen function is loaded because the policy file refers to it.
+	path, err := run(Config{Dir: dir, OutDir: "fx", PolicyFile: "fx/fixture.yaml"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.TypeCheck(t, dir, "./...")
+	contains(t, testutil.ReadFile(t, path), `Code: fake.Code(f.g),`)
+}
+
+func TestCustomGeneratorUnique(t *testing.T) {
+	model := "package model\n\nimport \"github.com/moznion/go-datlas/fixturekit\"\n\n" +
+		"func Code(g *fixturekit.Generator) string { return g.AlphaNum(8) }\n\n" +
+		"func Labels(g *fixturekit.Generator) map[string]string { return nil }\n\n" +
+		"//datlas:fixture\ntype T struct {\n\tA string `fixture:\"gen=Code,unique\"`\n}\n"
+	model = strings.Replace(model, "gen=Code", "gen=example.com/datlastest/model.Code", 1)
+	_, src, err := generateModel(t, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contains(t, src, `A: fixturekit.Unique(f.g, "example.com/datlastest/model.T.A", func() string { return model.Code(f.g) }),`)
+
+	bad := strings.Replace(model, "A string `fixture:\"gen=example.com/datlastest/model.Code,unique\"`",
+		"A map[string]string `fixture:\"gen=example.com/datlastest/model.Labels,unique\"`", 1)
+	_, _, err = generateModel(t, bad)
+	if err == nil || !strings.Contains(err.Error(), `"unique" requires a comparable type, not map[string]string`) {
+		t.Fatalf("unexpected error %v", err)
+	}
+}

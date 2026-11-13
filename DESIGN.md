@@ -706,7 +706,6 @@ Possible future features:
 
 - schema versioning
 - YAML include/import
-- custom field generators
 - Faker plugins
 - generated validation reports
 

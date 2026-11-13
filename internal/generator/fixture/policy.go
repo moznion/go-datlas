@@ -42,7 +42,7 @@ type policyType struct {
 }
 
 // packages returns the import paths the policy file refers to:
-// the packages of its types and of qualified wrap functions.
+// the packages of its types and of qualified wrap and gen functions.
 func (pf *policyFile) packages() []string {
 	var paths []string
 	for _, pt := range pf.Types {
@@ -51,6 +51,11 @@ func (pf *policyFile) packages() []string {
 			if policy, err := parseTag(p); err == nil {
 				if path, _ := splitQualified(policy.Params["wrap"]); path != "" {
 					paths = append(paths, path)
+				}
+				if policy.Generator == "gen" && len(policy.Candidates) == 1 {
+					if path, _ := splitQualified(policy.Candidates[0]); path != "" {
+						paths = append(paths, path)
+					}
 				}
 			}
 		}
