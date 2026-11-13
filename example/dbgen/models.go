@@ -16,3 +16,10 @@ type InsertAccountParams struct {
 	CreatedAt   time.Time
 	DeletedAt   sql.NullTime
 }
+
+// InsertMembershipParams are the parameters of an INSERT query; AccountID is a foreign key.
+type InsertMembershipParams struct {
+	ID        [16]byte
+	AccountID [16]byte
+	Role      string
+}

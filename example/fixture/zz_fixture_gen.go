@@ -72,6 +72,7 @@ func (f *Factory) User(opts ...func(*model.User)) model.User {
 			UpdatedAt: f.g.Now(),
 		},
 	}
+	v.CompanyID = v.Company.ID
 	for _, opt := range opts {
 		opt(&v)
 	}
@@ -130,4 +131,33 @@ func (f *Factory) Accounts(n int, opts ...func(*dbgen.InsertAccountParams)) []db
 		vs[i] = f.Account(opts...)
 	}
 	return vs
+}
+
+// Membership returns a new dbgen.InsertMembershipParams. opts are applied in order after the fields are generated.
+func (f *Factory) Membership(opts ...func(*dbgen.InsertMembershipParams)) dbgen.InsertMembershipParams {
+	v := dbgen.InsertMembershipParams{
+		ID:        f.g.UUID(),
+		AccountID: f.g.UUID(),
+		Role:      []string{"owner", "member"}[f.g.IntN(2)],
+	}
+	for _, opt := range opts {
+		opt(&v)
+	}
+	return v
+}
+
+// Memberships returns n new values built by Membership.
+func (f *Factory) Memberships(n int, opts ...func(*dbgen.InsertMembershipParams)) []dbgen.InsertMembershipParams {
+	vs := make([]dbgen.InsertMembershipParams, n)
+	for i := range vs {
+		vs[i] = f.Membership(opts...)
+	}
+	return vs
+}
+
+// MembershipAccountIDFrom returns an option of Membership that sets AccountID to the ID of src, a value built by Account.
+func MembershipAccountIDFrom(src dbgen.InsertAccountParams) func(*dbgen.InsertMembershipParams) {
+	return func(v *dbgen.InsertMembershipParams) {
+		v.AccountID = src.ID
+	}
 }

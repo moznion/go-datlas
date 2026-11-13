@@ -32,6 +32,8 @@ type User struct {
 	Code    string   `fixture:"seq,prefix=user-"`
 	Tags    []string `fixture:"word,count=2"`
 	Company Company  `fixture:"nested"`
+	// CompanyID is copied from Company, so that the two agree.
+	CompanyID UUID `fixture:"from=Company.ID"`
 	Timestamps
 	Note string
 }
