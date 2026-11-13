@@ -122,12 +122,21 @@ func datlasSeedLocalUsers1() UserSeed {
 	}
 }
 
+// SeedDatasets returns the names of the seed data datasets in dependency order: every dataset comes
+// after the datasets it refers to, so applying them in this order stores referenced records first.
+// Datasets without an order between them are in name order. Datasets referring to each other
+// in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
+func SeedDatasets() []string {
+	return []string{"companies", "users"}
+}
+
 // SeedEnvironments returns the environments that have seed data, in alphabetical order.
 func SeedEnvironments() []string {
 	return []string{"demo", "local"}
 }
 
 // SeedSet is the seed data of one environment.
+// Its fields are in the dependency order of SeedDatasets.
 type SeedSet struct {
 	// Companies is the seed data "companies".
 	Companies []CompanySeed

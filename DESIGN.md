@@ -393,6 +393,11 @@ ApplySeedData(ctx, "demo")
 Internally those functions consume generated Go values.
 `SeedFor(env)` gives `ApplySeedData` the seed data of an environment by name.
 
+References between datasets are known at generation time, so the generator also emits the
+order in which datasets can be applied: `MasterDatasets()` and `SeedDatasets()` list the dataset
+names so that every dataset comes after the datasets it refers to. The fields of `SeedSet`
+follow this order. Datasets in a reference cycle cannot be ordered and are listed adjacently.
+
 ---
 
 # Identity
@@ -424,6 +429,11 @@ Action string `yaml:"action" master:"key"`
 
 When a logical key is defined, a lookup function by key is generated
 (e.g. `RoleByCode`, `LocalUserByEmail`, `PermissionByRoleAndAction`).
+
+Master Data is part of the specification, so application code refers to individual records.
+For a single-field key of a string or integer type, a constant is generated per record
+(`RoleCodeAdmin = "admin"`), turning a removed or renamed key into a compile error.
+`//datlas:master roles consts=false` disables them.
 
 Records may refer to the logical key of another dataset:
 

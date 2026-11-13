@@ -6,6 +6,20 @@ import (
 	"time"
 )
 
+// MasterDatasets returns the names of the master data datasets in dependency order: every dataset comes
+// after the datasets it refers to, so applying them in this order stores referenced records first.
+// Datasets without an order between them are in name order. Datasets referring to each other
+// in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
+func MasterDatasets() []string {
+	return []string{"plans", "roles", "permissions"}
+}
+
+// Logical keys of Roles (Code).
+const (
+	RoleCodeAdmin  string = "admin"
+	RoleCodeMember string = "member"
+)
+
 // Roles returns the master data "roles", compiled from roles.yaml.
 // Each call returns a new copy that the caller may modify freely.
 func Roles() []RoleDefinition {
@@ -87,6 +101,12 @@ func datlasMasterPermissions2() PermissionDefinition {
 		Action: "read",
 	}
 }
+
+// Logical keys of Plans (Code).
+const (
+	PlanCodeFree string = "free"
+	PlanCodePro  string = "pro"
+)
 
 // Plans returns the master data "plans", compiled from plans.yaml.
 // Each call returns a new copy that the caller may modify freely.

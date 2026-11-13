@@ -28,7 +28,7 @@ const keysMarker = "//datlas:keys "
 
 // render compiles the YAML of every dataset and renders the generated file.
 // Records are compiled here because literals depend on the imports of the file.
-func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader.Enums) ([]byte, []textCheck, error) {
+func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader.Enums, nm *namer) ([]byte, []textCheck, error) {
 	im := output.NewImports(pkg.PkgPath, append(pkg.Types.Scope().Names(), "key", "env")...)
 
 	var (
@@ -66,12 +66,28 @@ func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader
 	if err := errors.Join(errs...); err != nil {
 		return nil, nil, err
 	}
+	consts := make([][]keyConst, len(datasets))
+	for i, ds := range datasets {
+		var err error
+		if consts[i], err = keyConsts(ds, nm, enums); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, nil, err
+	}
 
-	for _, ds := range datasets {
+	order := datasetOrder(datasets)
+	if kind == MasterData {
+		renderDatasetOrder(&b, masterDatasetsName, "master data", order)
+	}
+	for i, ds := range datasets {
+		renderKeyConsts(&b, im, ds, consts[i])
 		renderDataset(&b, im, ds, pkg.Types.Scope())
 	}
 	if kind == SeedData {
-		renderSeedSet(&b, im, datasets)
+		renderDatasetOrder(&b, seedDatasetsName, "seed data", order)
+		renderSeedSet(&b, im, datasets, order)
 	}
 	if usesPtr {
 		fmt.Fprintf(&b, "\nfunc %sPtr[T any](v T) *T { return &v }\n", kind.prefix())
@@ -237,12 +253,29 @@ func lowerCamel(s string) string {
 	return string(rs)
 }
 
+// renderDatasetOrder renders the function listing the dataset names in dependency order.
+func renderDatasetOrder(b *bytes.Buffer, funcName, what string, order []string) {
+	var quoted []string
+	for _, name := range order {
+		quoted = append(quoted, strconv.Quote(name))
+	}
+	fmt.Fprintf(b, `
+// %s returns the names of the %s datasets in dependency order: every dataset comes
+// after the datasets it refers to, so applying them in this order stores referenced records first.
+// Datasets without an order between them are in name order. Datasets referring to each other
+// in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
+func %s() []string {
+return []string{%s}
+}
+`, funcName, what, funcName, strings.Join(quoted, ", "))
+}
+
 // renderSeedSet renders the environment-level API of seed data.
-func renderSeedSet(b *bytes.Buffer, im *output.Imports, datasets []*Dataset) {
+// The fields of SeedSet follow the dependency order of the datasets.
+func renderSeedSet(b *bytes.Buffer, im *output.Imports, datasets []*Dataset, names []string) {
 	var (
 		envs     []string
 		seenEnv  = map[string]bool{}
-		names    []string
 		seenName = map[string]*Dataset{}
 	)
 	for _, ds := range datasets {
@@ -252,7 +285,6 @@ func renderSeedSet(b *bytes.Buffer, im *output.Imports, datasets []*Dataset) {
 		}
 		if seenName[ds.Name] == nil {
 			seenName[ds.Name] = ds
-			names = append(names, ds.Name)
 		}
 	}
 	sort.Strings(envs)
@@ -264,7 +296,7 @@ func renderSeedSet(b *bytes.Buffer, im *output.Imports, datasets []*Dataset) {
 	fmt.Fprintf(b, "\n// %s returns the environments that have seed data, in alphabetical order.\n", seedEnvironmentsName)
 	fmt.Fprintf(b, "func %s() []string {\nreturn []string{%s}\n}\n", seedEnvironmentsName, strings.Join(quoted, ", "))
 
-	fmt.Fprintf(b, "\n// %s is the seed data of one environment.\n", seedSetName)
+	fmt.Fprintf(b, "\n// %s is the seed data of one environment.\n// Its fields are in the dependency order of %s.\n", seedSetName, seedDatasetsName)
 	fmt.Fprintf(b, "type %s struct {\n", seedSetName)
 	for _, name := range names {
 		ds := seenName[name]
@@ -276,9 +308,11 @@ func renderSeedSet(b *bytes.Buffer, im *output.Imports, datasets []*Dataset) {
 	fmt.Fprintf(b, "func %s(env string) (%s, bool) {\nswitch env {\n", seedForName, seedSetName)
 	for _, env := range envs {
 		fmt.Fprintf(b, "case %q:\nreturn %s{\n", env, seedSetName)
-		for _, ds := range datasets {
-			if ds.Env == env {
-				fmt.Fprintf(b, "%s: %s(),\n", naming.Camel(ds.Name), ds.FuncName)
+		for _, name := range names {
+			for _, ds := range datasets {
+				if ds.Env == env && ds.Name == name {
+					fmt.Fprintf(b, "%s: %s(),\n", naming.Camel(ds.Name), ds.FuncName)
+				}
 			}
 		}
 		b.WriteString("}, true\n")

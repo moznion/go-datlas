@@ -112,6 +112,8 @@ type Dataset struct {
 	Schema Schema
 	// Singular overrides the singular form of the dataset name used in lookup function names.
 	Singular string
+	// NoConsts disables the constants of the logical keys of Master Data (consts=false).
+	NoConsts bool
 	// Files are the YAML files the records were compiled from.
 	// Seed Data environments without a file for the dataset have none and no records.
 	Files   []string
@@ -196,10 +198,11 @@ func Generate(kind Kind, cfg Config) (output.Result, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err := assignNames(kind, pkg, pkgDir, datasets); err != nil {
+	nm, err := assignNames(kind, pkg, pkgDir, datasets)
+	if err != nil {
 		return fail(err)
 	}
-	src, texts, err := render(kind, pkg, datasets, enums)
+	src, texts, err := render(kind, pkg, datasets, enums, nm)
 	if err != nil {
 		return fail(err)
 	}
@@ -215,6 +218,7 @@ func Generate(kind Kind, cfg Config) (output.Result, error) {
 type namedSchema struct {
 	name      string
 	singular  string
+	noConsts  bool
 	directive loader.Directive
 	schema    Schema
 }
@@ -231,14 +235,29 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 			continue
 		}
 		name := d.Args[0]
-		var singular string
+		var (
+			singular string
+			noConsts bool
+			seenOpt  = map[string]bool{}
+		)
 		for _, opt := range d.Args[1:] {
 			k, v, _ := strings.Cut(opt, "=")
-			if k != "singular" || !naming.IsIdentifier(v) || singular != "" {
-				errs = append(errs, fmt.Errorf("%s: //datlas:%s: unknown or repeated option %q (available: singular=<Name>)", d.Pos, kind.directive(), opt))
+			switch {
+			case seenOpt[k]:
+			case k == "singular" && naming.IsIdentifier(v):
+				singular = naming.Camel(v)
+				seenOpt[k] = true
+				continue
+			case k == "consts" && v == "false" && kind == MasterData:
+				noConsts = true
+				seenOpt[k] = true
 				continue
 			}
-			singular = naming.Camel(v)
+			available := "singular=<Name>"
+			if kind == MasterData {
+				available += ", consts=false"
+			}
+			errs = append(errs, fmt.Errorf("%s: //datlas:%s: unknown or repeated option %q (available: %s)", d.Pos, kind.directive(), opt, available))
 		}
 		if !validDatasetName(name) {
 			errs = append(errs, fmt.Errorf("%s: invalid dataset name %q: use letters, digits, '_' and '-', starting with a letter", d.Pos, name))
@@ -264,7 +283,7 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 			errs = append(errs, err)
 			continue
 		}
-		result = append(result, namedSchema{name: name, singular: singular, directive: d, schema: schema})
+		result = append(result, namedSchema{name: name, singular: singular, noConsts: noConsts, directive: d, schema: schema})
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
@@ -553,7 +572,7 @@ func discover(kind Kind, dataDir string, schemas []namedSchema) ([]*Dataset, err
 		}
 		byDataset := map[string]*Dataset{}
 		for _, s := range schemas {
-			ds := &Dataset{Kind: kind, Name: s.name, Env: loc.env, Schema: s.schema, Singular: s.singular}
+			ds := &Dataset{Kind: kind, Name: s.name, Env: loc.env, Schema: s.schema, Singular: s.singular, NoConsts: s.noConsts}
 			byDataset[s.name] = ds
 			datasets = append(datasets, ds)
 		}
@@ -686,45 +705,63 @@ func yamlFiles(dir string) ([]string, error) {
 	return files, nil
 }
 
-// Identifiers generated for Seed Data environments.
+// Identifiers generated once per package.
 const (
+	masterDatasetsName   = "MasterDatasets"
+	seedDatasetsName     = "SeedDatasets"
 	seedEnvironmentsName = "SeedEnvironments"
 	seedSetName          = "SeedSet"
 	seedForName          = "SeedFor"
 )
 
+// namer records the generated identifiers and detects collisions between them, with
+// identifiers declared in the package, and with identifiers generated for the other kind.
+type namer struct {
+	kind       Kind
+	pkg        *packages.Package
+	otherPath  string
+	otherNames map[string]bool
+	used       map[string]string
+}
+
+func (n *namer) claim(name, owner string) error {
+	if prev, ok := n.used[name]; ok {
+		return fmt.Errorf("%s: generated identifier %s conflicts with %s", owner, name, prev)
+	}
+	if n.otherNames[name] {
+		return fmt.Errorf("%s: generated identifier %s conflicts with the %s generated into %s",
+			owner, name, n.kind.other(), displayPath(n.otherPath))
+	}
+	if obj := n.pkg.Types.Scope().Lookup(name); obj != nil {
+		return fmt.Errorf("%s: generated identifier %s conflicts with the declaration at %s",
+			owner, name, n.pkg.Fset.Position(obj.Pos()))
+	}
+	n.used[name] = owner
+	return nil
+}
+
 // assignNames decides the generated identifiers and checks they do not collide with each other,
 // with identifiers declared in the package, or with identifiers generated for the other kind.
-func assignNames(kind Kind, pkg *packages.Package, pkgDir string, datasets []*Dataset) error {
+func assignNames(kind Kind, pkg *packages.Package, pkgDir string, datasets []*Dataset) (*namer, error) {
 	otherPath := filepath.Join(pkgDir, kind.other().FileName())
 	otherNames, err := generatedNames(otherPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var errs []error
-	used := map[string]string{}
+	nm := &namer{kind: kind, pkg: pkg, otherPath: otherPath, otherNames: otherNames, used: map[string]string{}}
 	claim := func(name, owner string) {
-		if prev, ok := used[name]; ok {
-			errs = append(errs, fmt.Errorf("%s: generated identifier %s conflicts with %s", owner, name, prev))
-			return
+		if err := nm.claim(name, owner); err != nil {
+			errs = append(errs, err)
 		}
-		if otherNames[name] {
-			errs = append(errs, fmt.Errorf("%s: generated identifier %s conflicts with the %s generated into %s",
-				owner, name, kind.other(), displayPath(otherPath)))
-			return
-		}
-		if obj := pkg.Types.Scope().Lookup(name); obj != nil {
-			errs = append(errs, fmt.Errorf("%s: generated identifier %s conflicts with the declaration at %s",
-				owner, name, pkg.Fset.Position(obj.Pos())))
-			return
-		}
-		used[name] = owner
 	}
 	if kind == SeedData {
-		for _, n := range []string{seedEnvironmentsName, seedSetName, seedForName} {
+		for _, n := range []string{seedDatasetsName, seedEnvironmentsName, seedSetName, seedForName} {
 			claim(n, "seed data")
 		}
+	} else {
+		claim(masterDatasetsName, "master data")
 	}
 	for _, ds := range datasets {
 		ds.FuncName = naming.Camel(ds.Env) + naming.Camel(ds.Name)
@@ -749,7 +786,10 @@ func assignNames(kind Kind, pkg *packages.Package, pkgDir string, datasets []*Da
 			claim(ds.LookupName, owner)
 		}
 	}
-	return errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return nm, nil
 }
 
 // generatedNames returns the top-level identifiers declared in the datlas-generated file at path.
