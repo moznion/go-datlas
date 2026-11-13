@@ -387,6 +387,10 @@ therefore written with their numeric values (`tier: 2`), not their text form.
   holding Go files (other packages) are ignored. A file named after a declared dataset in a subdirectory
   (up to two levels below the data directory or an environment directory) is an error, since it would not
   be loaded; other YAML files there (deployment manifests, API specs, ...) are left alone.
+- Symbolic links are followed, so data can be shared: link a file into several environments
+  (`local/companies.yaml -> ../_common/companies.yaml`), or link a whole environment (`e2e -> local`).
+  Broken links are errors. (Git checks links out as plain files when `core.symlinks` is off, e.g. on
+  some Windows setups.)
 - Each file holds one sequence of records.
 - Every field is required unless it is a pointer or its `yaml` tag has `omitempty`.
 - `datlas:"nonzero"` rejects empty and zero values (`""`, `0`, `false`, `[]`, `{}`, `null`, the zero time)
