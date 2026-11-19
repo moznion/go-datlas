@@ -394,7 +394,9 @@ therefore written with their numeric values (`tier: 2`), not their text form.
 - Each file holds one sequence of records.
 - Every field is required unless it is a pointer or its `yaml` tag has `omitempty`.
 - `datlas:"nonzero"` rejects empty and zero values (`""`, `0`, `false`, `[]`, `{}`, `null`, the zero time)
-  and makes the field required. Logical keys are always nonzero.
+  and makes the field required. Logical keys are always nonzero. On a type implementing
+  `encoding.TextUnmarshaler`, it also rejects texts that decode to the zero value of the type
+  (e.g. the nil UUID `00000000-0000-0000-0000-000000000000`).
 - Unknown fields, missing required fields, type mismatches, out-of-range numbers, malformed YAML,
   duplicate logical keys, broken references, invalid enum values and YAML files without a schema are errors.
 - Supported field types: strings, integers, floats, bools, `[]byte` (written as a string), `time.Time`
@@ -402,6 +404,7 @@ therefore written with their numeric values (`tier: 2`), not their text form.
   arrays, maps with scalar keys, and nested structs (including `yaml:",inline"`).
   Anchors, aliases and merge keys (`<<`) work.
 - Types implementing `encoding.TextUnmarshaler` (e.g. decimal types) are supported: the generator
-  builds and runs a small program calling `UnmarshalText` on every value to validate it, and the
+  builds and runs a small program calling `UnmarshalText` on every value to validate it (and, for
+  `datlas:"nonzero"` fields, to check that the decoded value is not the zero value), and the
   generated code decodes the values when the accessor is called.
 
