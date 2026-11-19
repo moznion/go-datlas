@@ -51,23 +51,23 @@ func runTextChecks(pkg *packages.Package, pkgDir, genPath string, genSrc []byte,
 	reflectPkg := im.Add("reflect", "reflect")
 	var body bytes.Buffer
 	fmt.Fprintf(&body, `// %[1]s reports the values that fail to decode, or decode to the zero value of their type
-// in a nonzero field. It exists only while datlas validates them.
+// in a nonzero field or as an element of an elem=nonzero field. It exists only while datlas validates them.
 func %[1]s() []string {
 	var datlasErrs []string
-	datlasCheck := func(pos, typ string, u %[2]s.TextUnmarshaler, text, nonzeroField string) {
+	datlasCheck := func(pos, typ string, u %[2]s.TextUnmarshaler, text, zeroErr string) {
 		if err := u.UnmarshalText([]byte(text)); err != nil {
 			datlasErrs = append(datlasErrs, %[3]s.Sprintf("%%s: invalid %%s %%q: %%v", pos, typ, text, err))
 			return
 		}
-		if nonzeroField != "" && %[4]s.ValueOf(u).Elem().IsZero() {
-			datlasErrs = append(datlasErrs, %[3]s.Sprintf("%%s: field %%q must not be empty or zero", pos, nonzeroField))
+		if zeroErr != "" && %[4]s.ValueOf(u).Elem().IsZero() {
+			datlasErrs = append(datlasErrs, pos+": "+zeroErr)
 		}
 	}
 `, checkFunc, encPkg, fmtPkg, reflectPkg)
 	for _, c := range checks {
 		fmt.Fprintf(&body, "datlasCheck(%s, %s, new(%s), %s, %s)\n",
 			strconv.Quote(c.pos), strconv.Quote(typeName(c.typ)), im.TypeString(c.typ), strconv.Quote(c.text),
-			strconv.Quote(c.nonzeroField))
+			strconv.Quote(c.zeroErr))
 	}
 	body.WriteString("return datlasErrs\n}\n")
 

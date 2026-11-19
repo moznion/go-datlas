@@ -257,6 +257,56 @@ func TestTextUnmarshaler(t *testing.T) {
 	mustFail(t, err, `prices.yaml:1:33: invalid data.Money "100": missing decimal point`)
 }
 
+// elem=nonzero rejects empty or zero elements of slices and arrays, and values of maps.
+func TestElemNonzero(t *testing.T) {
+	schema := "package data\n\n//datlas:master roles\ntype Role struct {\n" +
+		"\tCode   string            `yaml:\"code\" master:\"key\"`\n" +
+		"\tTags   []string          `yaml:\"tags\" datlas:\"nonzero,elem=nonzero\"`\n" +
+		"\tLevels [2]int            `yaml:\"levels\" datlas:\"elem=nonzero\"`\n" +
+		"\tLabels map[string]string `yaml:\"labels\" datlas:\"elem=nonzero\"`\n" +
+		"\tOpt    []string          `yaml:\"opt,omitempty\" datlas:\"elem=nonzero\"`\n" +
+		"}\n"
+	if _, err := generate(t, MasterData, map[string]string{
+		"schema.go":  schema,
+		"roles.yaml": "- {code: a, tags: [x, y], levels: [1, 2], labels: {k: v}}\n- {code: b, tags: [x], levels: [1, 2], labels: {}, opt: []}\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for data, want := range map[string]string{
+		"- {code: a, tags: [x, ''], levels: [1, 2], labels: {k: v}}\n":           `roles.yaml:1:23: element 1 of field "tags" must not be empty or zero`,
+		"- {code: a, tags: [x, null], levels: [1, 2], labels: {k: v}}\n":         `element 1 of field "tags" must not be empty or zero`,
+		"- {code: a, tags: [x], levels: [0, 2], labels: {k: v}}\n":               `element 0 of field "levels" must not be empty or zero`,
+		"- {code: a, tags: [x], levels: [1, 2], labels: {k: ''}}\n":              `value of key "k" in field "labels" must not be empty or zero`,
+		"- {code: a, tags: [x], levels: [1, 2], labels: {k: v}, opt: [a, '']}\n": `element 1 of field "opt" must not be empty or zero`,
+		// nonzero still applies to the slice itself.
+		"- {code: a, tags: [], levels: [1, 2], labels: {k: v}}\n": `field "tags" must not be empty or zero`,
+	} {
+		_, err := generate(t, MasterData, map[string]string{"schema.go": schema, "roles.yaml": data})
+		mustFail(t, err, want)
+	}
+
+	// Every empty element is reported, not only the first one.
+	_, err := generate(t, MasterData, map[string]string{
+		"schema.go":  schema,
+		"roles.yaml": "- {code: a, tags: ['', x, ''], levels: [1, 2], labels: {k: v}}\n",
+	})
+	mustFail(t, err, `element 0 of field "tags"`)
+	mustFail(t, err, `element 2 of field "tags"`)
+
+	for field, want := range map[string]string{
+		"X string `datlas:\"elem=nonzero\"`":            "elem=nonzero needs a slice, array or map field, not string",
+		"X []byte `datlas:\"elem=nonzero\"`":            "elem=nonzero is not supported for type []byte",
+		"X []struct{ Y int } `datlas:\"elem=nonzero\"`": "elem=nonzero is not supported for element type struct{Y int}",
+		"X []string `datlas:\"elem=nonempty\"`":         `unknown datlas tag option "elem=nonempty" (available for elem: nonzero)`,
+		"X []string `datlas:\"each=nonzero\"`":          `unknown datlas tag option "each=nonzero" (available: nonzero, elem=nonzero)`,
+	} {
+		src := strings.Replace(moneySchema, "Raw    []byte", field+"\n\tRaw    []byte", 1)
+		_, err := generate(t, MasterData, map[string]string{"schema.go": src, "prices.yaml": "[]\n"})
+		mustFail(t, err, want)
+	}
+}
+
 // idSchema has text types whose zero value can be written: ID (an array, like a UUID) and Money (a struct).
 const idSchema = `package data
 
@@ -332,6 +382,42 @@ func TestNonzeroTextUnmarshaler(t *testing.T) {
 	})
 	mustFail(t, err, `demo/items.yaml:1:17: field "id" must not be empty or zero`)
 	mustFail(t, err, `demo/items.yaml:2:17: field "id" must not be empty or zero`)
+}
+
+// elem=nonzero on elements decoded with encoding.TextUnmarshaler rejects elements that decode to the zero value.
+func TestElemNonzeroTextUnmarshaler(t *testing.T) {
+	schema := strings.Replace(idSchema, "\tOwner  ID", "\tIDs    []ID          "+"`yaml:\"ids\" datlas:\"nonzero,elem=nonzero\"`"+
+		"\n\tByName map[string]ID "+"`yaml:\"by_name,omitempty\" datlas:\"elem=nonzero\"`"+"\n\tOwner  ID", 1)
+	if _, err := generate(t, SeedData, map[string]string{
+		"schema.go":       schema,
+		"demo/items.yaml": "- {name: a, id: 0a0b, amount: 1.00, owner: '0000', ids: [0a0b, 0c0d], by_name: {x: 0a0b}}\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for data, want := range map[string]string{
+		// The texts are not empty, but decode to the zero value.
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: [0a0b, '0000']}\n":               `demo/items.yaml:1:62: element 1 of field "ids" must not be empty or zero`,
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: [0a0b], by_name: {x: '0000'}}\n": `value of key "x" in field "by_name" must not be empty or zero`,
+		// An anchor reused by an alias is reported for each element.
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: [&z '0000', *z]}\n": `element 1 of field "ids" must not be empty or zero`,
+		// A value that fails to decode is reported as invalid, not as zero.
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: ['000']}\n": `invalid data.ID "000": must be 4 hex digits`,
+		// Empty elements are rejected without decoding.
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: [0a0b, null]}\n": `element 1 of field "ids" must not be empty or zero`,
+	} {
+		_, err := generate(t, SeedData, map[string]string{"schema.go": schema, "demo/items.yaml": data})
+		mustFail(t, err, want)
+	}
+
+	// The anchor's own element is reported too, and a zero field still gets its field error.
+	_, err := generate(t, SeedData, map[string]string{
+		"schema.go":       schema,
+		"demo/items.yaml": "- {name: a, id: '0000', amount: 1.00, owner: 0a0b, ids: [&z '0000', *z]}\n",
+	})
+	mustFail(t, err, `field "id" must not be empty or zero`)
+	mustFail(t, err, `element 0 of field "ids" must not be empty or zero`)
+	mustFail(t, err, `element 1 of field "ids" must not be empty or zero`)
 }
 
 func TestReferences(t *testing.T) {
