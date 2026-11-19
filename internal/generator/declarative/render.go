@@ -59,8 +59,11 @@ func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader
 				errs = append(errs, err)
 			}
 		}
-		if err := checkDuplicateKeys(ds); err != nil {
-			errs = append(errs, err)
+		// Keys decoded with encoding.TextUnmarshaler are compared by value in runTextChecks.
+		if !hasTextKey(ds, enums) {
+			if err := checkDuplicateKeys(ds); err != nil {
+				errs = append(errs, err)
+			}
 		}
 		if err := checkUniques(ds); err != nil {
 			errs = append(errs, err)
@@ -86,7 +89,7 @@ func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader
 	}
 	for i, ds := range datasets {
 		renderKeyConsts(&b, im, ds, consts[i])
-		renderDataset(&b, im, ds, pkg.Types.Scope())
+		renderDataset(&b, im, ds, pkg.Types.Scope(), hasTextKey(ds, enums))
 	}
 	if kind == SeedData {
 		renderDatasetOrder(&b, seedDatasetsName, "seed data", order)
@@ -112,6 +115,16 @@ func %[1]sText[T any, PT interface {
 `, kind.prefix())
 	}
 	return output.File(pkg.Name, im, b.Bytes()), texts, nil
+}
+
+// hasTextKey reports whether a logical key field of ds is decoded with encoding.TextUnmarshaler.
+func hasTextKey(ds *Dataset, enums *loader.Enums) bool {
+	for _, k := range ds.Schema.Keys {
+		if isText(k.Type(), enums) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkDuplicateKeys fails when two records share a logical key.
@@ -182,7 +195,7 @@ func (ds *Dataset) constructor(i int) string {
 	return fmt.Sprintf("%s%s%d", ds.Kind.prefix(), ds.FuncName, i)
 }
 
-func renderDataset(b *bytes.Buffer, im *output.Imports, ds *Dataset, scope *types.Scope) {
+func renderDataset(b *bytes.Buffer, im *output.Imports, ds *Dataset, scope *types.Scope, textKey bool) {
 	typ := im.TypeString(ds.Schema.Type.Type())
 
 	fmt.Fprintf(b, "\n// %s returns the %s %q", ds.FuncName, ds.Kind, ds.Name)
@@ -200,7 +213,10 @@ func renderDataset(b *bytes.Buffer, im *output.Imports, ds *Dataset, scope *type
 	}
 	b.WriteString("}\n}\n")
 
-	if ds.LookupName != "" {
+	switch {
+	case ds.LookupName != "" && textKey:
+		renderTextLookup(b, im, ds, typ, scope)
+	case ds.LookupName != "":
 		renderLookup(b, im, ds, typ, scope)
 	}
 	for i, r := range ds.Records {
@@ -252,6 +268,64 @@ func renderLookup(b *bytes.Buffer, im *output.Imports, ds *Dataset, typ string, 
 			b.WriteString("}\n")
 		}
 	}
+	fmt.Fprintf(b, "return %s{}, false\n}\n", typ)
+}
+
+// renderTextLookup renders the key lookup function of a dataset whose key has a field decoded
+// with encoding.TextUnmarshaler. Such values are not constants, so instead of a switch the
+// function looks the key up in a map built once, on the first call, from the decoded keys.
+// The keys of master data of this kind are not marked for references from other packages
+// (see keysMarker): those read the keys back as literals.
+func renderTextLookup(b *bytes.Buffer, im *output.Imports, ds *Dataset, typ string, scope *types.Scope) {
+	keys := ds.Schema.Keys
+	var names []string
+	for _, k := range keys {
+		names = append(names, k.Name())
+	}
+	verb := "equals the given value"
+	if len(keys) > 1 {
+		verb = "equal the given values"
+	}
+	syncPkg := im.Add("sync", "sync")
+	index := ds.Kind.prefix() + ds.FuncName + "Index"
+
+	keyType := im.TypeString(keys[0].Type())
+	var params []string
+	var decls []string
+	if len(keys) == 1 {
+		params = []string{"key"}
+		decls = []string{"key " + keyType}
+	} else {
+		params = paramNames(keys, scope)
+		keyType = ds.Kind.prefix() + ds.FuncName + "Key"
+		fmt.Fprintf(b, "\n// %s is a logical key of %s.\ntype %s struct {\n", keyType, ds.FuncName, keyType)
+		for i, k := range keys {
+			decls = append(decls, params[i]+" "+im.TypeString(k.Type()))
+			fmt.Fprintf(b, "k%d %s\n", i, im.TypeString(k.Type()))
+		}
+		b.WriteString("}\n")
+	}
+	keyExpr := func(lits []string) string {
+		if len(keys) == 1 {
+			return lits[0]
+		}
+		return keyType + "{" + strings.Join(lits, ", ") + "}"
+	}
+
+	fmt.Fprintf(b, "\n// %s maps the logical keys of %s to the constructors of the records.\n", index, ds.FuncName)
+	fmt.Fprintf(b, "var %s = %s.OnceValue(func() map[%s]func() %s {\nreturn map[%s]func() %s{", index, syncPkg, keyType, typ, keyType, typ)
+	if len(ds.Records) > 0 {
+		b.WriteString("\n")
+	}
+	for i, r := range ds.Records {
+		fmt.Fprintf(b, "%s: %s,\n", keyExpr(r.Keys), ds.constructor(i))
+	}
+	b.WriteString("}\n})\n")
+
+	fmt.Fprintf(b, "\n// %s returns the record of %s whose %s %s.\n// Each call returns a new copy.\n",
+		ds.LookupName, ds.FuncName, strings.Join(names, " and "), verb)
+	fmt.Fprintf(b, "func %s(%s) (%s, bool) {\n", ds.LookupName, strings.Join(decls, ", "), typ)
+	fmt.Fprintf(b, "if f, ok := %s()[%s]; ok {\nreturn f(), true\n}\n", index, keyExpr(params))
 	fmt.Fprintf(b, "return %s{}, false\n}\n", typ)
 }
 

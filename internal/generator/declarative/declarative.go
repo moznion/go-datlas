@@ -220,7 +220,7 @@ func Generate(kind Kind, cfg Config) (output.Result, error) {
 	if err := checkRefs(kind, cfg.Dir, datasets); err != nil {
 		return fail(err)
 	}
-	if err := runTextChecks(pkg, pkgDir, path, src, texts); err != nil {
+	if err := runTextChecks(pkg, pkgDir, path, src, texts, datasets, enums); err != nil {
 		return fail(err)
 	}
 	return output.Result{Path: path, Src: src}, nil
@@ -315,9 +315,13 @@ func validDatasetName(name string) bool {
 }
 
 // scalarKind returns the kind of values usable as keys and references:
-// "string", "integer" or "bool", or "" for any other type.
+// "string", "integer" or "bool", "text" for a comparable type decoded with encoding.TextUnmarshaler
+// (compared by decoded value, see runTextChecks), or "" for any other type.
 func scalarKind(t types.Type, enums *loader.Enums) string {
 	if isText(t, enums) {
+		if types.Comparable(t) {
+			return "text"
+		}
 		return ""
 	}
 	b, ok := t.Underlying().(*types.Basic)
@@ -388,8 +392,10 @@ func schemaOf(kind Kind, d loader.Directive, enums *loader.Enums) (Schema, error
 						errs = append(errs, fmt.Errorf("%s: a logical key must be a field of %s or of a struct inlined into it", ctx, d.Type.Name()))
 					case !f.required():
 						errs = append(errs, fmt.Errorf("%s: a logical key field must be required (not a pointer, not omitempty)", ctx))
+					case scalarKind(v.Type(), enums) == "" && isText(v.Type(), enums):
+						errs = append(errs, fmt.Errorf("%s: a logical key of a type implementing encoding.TextUnmarshaler must be comparable, not %s", ctx, v.Type()))
 					case scalarKind(v.Type(), enums) == "":
-						errs = append(errs, fmt.Errorf("%s: a logical key must be a string, integer or bool type, not %s", ctx, v.Type()))
+						errs = append(errs, fmt.Errorf("%s: a logical key must be a string, integer or bool type, or a comparable type implementing encoding.TextUnmarshaler, not %s", ctx, v.Type()))
 					default:
 						schema.Keys = append(schema.Keys, v)
 					}
@@ -440,10 +446,12 @@ func addUnique(schema *Schema, groups map[string]int, f structField, keyLevel bo
 	if s, ok := t.Underlying().(*types.Slice); ok && !isBytes(t) && f.constraints.unique {
 		t, elements = types.Unalias(s.Elem()), true
 	}
+	// scalarKind accepts comparable text types (for logical keys, whose duplicates are found by
+	// decoding them), but unique values are compared by their literals, so text types are rejected first.
+	if isText(t, enums) {
+		return fmt.Errorf("unique is not supported for %s: values of types implementing encoding.TextUnmarshaler can only be compared after decoding", typeName(t))
+	}
 	if scalarKind(t, enums) == "" {
-		if isText(t, enums) {
-			return fmt.Errorf("unique is not supported for %s: values of types implementing encoding.TextUnmarshaler can only be compared after decoding", typeName(t))
-		}
 		supported := "a string, integer or bool type"
 		if f.constraints.unique {
 			supported += " (or a slice of one)"
@@ -487,8 +495,9 @@ func structsIn(t types.Type, enums *loader.Enums) []*types.Struct {
 }
 
 func parseRef(kind Kind, d loader.Directive, v *types.Var, target string, enums *loader.Enums) (Ref, error) {
-	if scalarKind(refElem(v.Type()), enums) == "" {
-		return Ref{}, fmt.Errorf("a reference must be a string, integer or bool type (or a pointer or slice of one), not %s", v.Type())
+	kind2 := scalarKind(refElem(v.Type()), enums)
+	if kind2 == "" {
+		return Ref{}, fmt.Errorf("a reference must be a string, integer or bool type, or a comparable type implementing encoding.TextUnmarshaler (or a pointer or slice of one), not %s", v.Type())
 	}
 	ref := Ref{Field: v, Dataset: target}
 	if i := strings.LastIndex(target, "."); i >= 0 {
@@ -499,6 +508,11 @@ func parseRef(kind Kind, d loader.Directive, v *types.Var, target string, enums 
 	}
 	if ref.Package == d.Type.Pkg().Path() && kind == MasterData {
 		ref.Package = ""
+	}
+	if ref.Package != "" && kind2 == "text" {
+		// The keys of another package are read back from its generated code, which has no
+		// literals for values decoded with encoding.TextUnmarshaler.
+		return Ref{}, fmt.Errorf("a reference to master data of another package cannot be of a type implementing encoding.TextUnmarshaler (%s) yet", v.Type())
 	}
 	return ref, nil
 }
@@ -537,8 +551,14 @@ func compatibleKey(ref Ref, keys []*types.Var, enums *loader.Enums) error {
 	case len(keys) > 1:
 		return fmt.Errorf("dataset %q has a composite key, which cannot be referred to by a single field", ref.Dataset)
 	}
-	if got, want := scalarKind(refElem(ref.Field.Type()), enums), scalarKind(keys[0].Type(), enums); got != want {
+	elem := refElem(ref.Field.Type())
+	got, want := scalarKind(elem, enums), scalarKind(keys[0].Type(), enums)
+	if got != want {
 		return fmt.Errorf("reference of %s type cannot refer to the %s key of dataset %q", got, want, ref.Dataset)
+	}
+	// Values decoded with encoding.TextUnmarshaler are compared as values of the key type.
+	if got == "text" && !types.Identical(types.Unalias(elem), types.Unalias(keys[0].Type())) {
+		return fmt.Errorf("reference of type %s cannot refer to the key of type %s of dataset %q", elem, keys[0].Type(), ref.Dataset)
 	}
 	return nil
 }

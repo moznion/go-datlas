@@ -42,6 +42,9 @@ func checkRefs(kind Kind, dir string, datasets []*Dataset) error {
 	for _, ds := range datasets {
 		for _, r := range ds.Records {
 			for _, rv := range r.Refs {
+				if rv.Type != nil {
+					continue // decoded with encoding.TextUnmarshaler; checked by value in runTextChecks
+				}
 				var keys keySet
 				if rv.Ref.Package == "" {
 					keys = local[ds.Env+"\x00"+rv.Ref.Dataset]
@@ -119,7 +122,7 @@ func externalKeys(dir, pkgPath, dataset string) (keySet, error) {
 		})
 		return keys, nil
 	}
-	return nil, fmt.Errorf("%s declares no master data %q with a single-field logical key (regenerate it if it is out of date)", pkgPath, dataset)
+	return nil, fmt.Errorf("%s declares no master data %q with a single-field logical key of a string, integer or bool type (regenerate it if it is out of date)", pkgPath, dataset)
 }
 
 func hasKeysMarker(doc *ast.CommentGroup, dataset string) bool {

@@ -288,6 +288,11 @@ func PermissionByRoleAndAction(role string, action string) (PermissionDefinition
 Every call returns a new copy, so callers cannot modify the master data.
 Master data must declare a logical key (`master:"key"`); tagging several fields makes a composite key.
 Key fields must be fields of the schema or of a struct inlined into it (`yaml:",inline"`).
+A key field is a string, integer or bool type, or a comparable type implementing `encoding.TextUnmarshaler`
+(such as `uuid.UUID`). Keys of such types are compared by their decoded value: `0191D3A0-...` and
+`0191d3a0-...` are the same UUID, so they are duplicates, and a reference may be written either way.
+The lookup function takes the typed key (`func ShopByUUID(key uuid.UUID) (Shop, bool)`) and decodes
+the keys once, on its first call.
 
 Lookup function names use the singular form of the dataset name. Override it when the guess is wrong:
 `//datlas:master people singular=Person` generates `PersonByCode`.
@@ -350,6 +355,10 @@ Map keys cannot be references.
 - A seed data reference points at seed data of the same environment.
 - `ref=<import path>.<dataset>` points at master data in another package. That package must be
   generated first (`datlas master`), because the keys are read from its generated code.
+  Such references cannot be of `encoding.TextUnmarshaler` types (nor point at keys of such types) yet.
+
+A reference to a key of an `encoding.TextUnmarshaler` type must have the same type as the key;
+its values are compared with the keys after decoding.
 
 ## Applying order
 
