@@ -155,17 +155,10 @@ func checkDuplicateKeys(ds *Dataset) error {
 func checkUniques(ds *Dataset) error {
 	var errs []error
 	for i, u := range ds.Schema.Uniques {
-		var names []string
-		for _, f := range u.Fields {
-			names = append(names, f.Name())
+		if u.Text {
+			continue // compared after decoding, by runTextChecks
 		}
-		what := "unique field " + names[0]
-		switch {
-		case u.Elements:
-			what = "element of unique field " + names[0]
-		case u.Group != "":
-			what = fmt.Sprintf("unique group %q (%s)", u.Group, strings.Join(names, ", "))
-		}
+		what := u.describe()
 		seen := map[string]string{}
 		for _, r := range ds.Records {
 			for _, v := range r.Uniques[i] {
@@ -178,6 +171,21 @@ func checkUniques(ds *Dataset) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// describe names the constraint in errors about duplicate values.
+func (u Unique) describe() string {
+	var names []string
+	for _, f := range u.Fields {
+		names = append(names, f.Name())
+	}
+	switch {
+	case u.Elements:
+		return "element of unique field " + names[0]
+	case u.Group != "":
+		return fmt.Sprintf("unique group %q (%s)", u.Group, strings.Join(names, ", "))
+	}
+	return "unique field " + names[0]
 }
 
 func (ds *Dataset) source() string {

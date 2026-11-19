@@ -464,7 +464,7 @@ Generation fails for:
 - invalid types
 - malformed YAML
 - duplicate logical keys
-- duplicate values of fields tagged `datlas:"unique"` or `datlas:"unique=<group>"`
+- duplicate values of fields tagged `datlas:"unique"` or `datlas:"unique=<group>"` (for `encoding.TextUnmarshaler` types, compared by decoded value)
 - references to missing keys
 - values outside of an enum
 - empty values of fields tagged `datlas:"nonzero"` (for `encoding.TextUnmarshaler` types, values that decode to the zero value),
