@@ -257,6 +257,57 @@ func TestTextUnmarshaler(t *testing.T) {
 	mustFail(t, err, `prices.yaml:1:33: invalid data.Money "100": missing decimal point`)
 }
 
+// elem=nonzero rejects empty or zero elements of slices and arrays, and values of maps.
+func TestElemNonzero(t *testing.T) {
+	schema := "package data\n\n//datlas:master roles\ntype Role struct {\n" +
+		"\tCode   string            `yaml:\"code\" master:\"key\"`\n" +
+		"\tTags   []string          `yaml:\"tags\" datlas:\"nonzero,elem=nonzero\"`\n" +
+		"\tLevels [2]int            `yaml:\"levels\" datlas:\"elem=nonzero\"`\n" +
+		"\tLabels map[string]string `yaml:\"labels\" datlas:\"elem=nonzero\"`\n" +
+		"\tOpt    []string          `yaml:\"opt,omitempty\" datlas:\"elem=nonzero\"`\n" +
+		"}\n"
+	if _, err := generate(t, MasterData, map[string]string{
+		"schema.go":  schema,
+		"roles.yaml": "- {code: a, tags: [x, y], levels: [1, 2], labels: {k: v}}\n- {code: b, tags: [x], levels: [1, 2], labels: {}, opt: []}\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for data, want := range map[string]string{
+		"- {code: a, tags: [x, ''], levels: [1, 2], labels: {k: v}}\n":           `roles.yaml:1:23: element 1 of field "tags" must not be empty or zero`,
+		"- {code: a, tags: [x, null], levels: [1, 2], labels: {k: v}}\n":         `element 1 of field "tags" must not be empty or zero`,
+		"- {code: a, tags: [x], levels: [0, 2], labels: {k: v}}\n":               `element 0 of field "levels" must not be empty or zero`,
+		"- {code: a, tags: [x], levels: [1, 2], labels: {k: ''}}\n":              `value of key "k" in field "labels" must not be empty or zero`,
+		"- {code: a, tags: [x], levels: [1, 2], labels: {k: v}, opt: [a, '']}\n": `element 1 of field "opt" must not be empty or zero`,
+		// nonzero still applies to the slice itself.
+		"- {code: a, tags: [], levels: [1, 2], labels: {k: v}}\n": `field "tags" must not be empty or zero`,
+	} {
+		_, err := generate(t, MasterData, map[string]string{"schema.go": schema, "roles.yaml": data})
+		mustFail(t, err, want)
+	}
+
+	// Every empty element is reported, not only the first one.
+	_, err := generate(t, MasterData, map[string]string{
+		"schema.go":  schema,
+		"roles.yaml": "- {code: a, tags: ['', x, ''], levels: [1, 2], labels: {k: v}}\n",
+	})
+	mustFail(t, err, `element 0 of field "tags"`)
+	mustFail(t, err, `element 2 of field "tags"`)
+
+	for field, want := range map[string]string{
+		"X string `datlas:\"elem=nonzero\"`":            "elem=nonzero needs a slice, array or map field, not string",
+		"X []byte `datlas:\"elem=nonzero\"`":            "elem=nonzero is not supported for type []byte",
+		"X []struct{ Y int } `datlas:\"elem=nonzero\"`": "elem=nonzero is not supported for element type struct{Y int}",
+		"X []Money `datlas:\"elem=nonzero\"`":           "elem=nonzero is not supported for element type example.com/datlastest.Money",
+		"X []string `datlas:\"elem=nonempty\"`":         `unknown datlas tag option "elem=nonempty" (available for elem: nonzero)`,
+		"X []string `datlas:\"each=nonzero\"`":          `unknown datlas tag option "each=nonzero" (available: nonzero, elem=nonzero)`,
+	} {
+		src := strings.Replace(moneySchema, "Raw    []byte", field+"\n\tRaw    []byte", 1)
+		_, err := generate(t, MasterData, map[string]string{"schema.go": src, "prices.yaml": "[]\n"})
+		mustFail(t, err, want)
+	}
+}
+
 func TestReferences(t *testing.T) {
 	schema := `package data
 

@@ -395,6 +395,10 @@ therefore written with their numeric values (`tier: 2`), not their text form.
 - Every field is required unless it is a pointer or its `yaml` tag has `omitempty`.
 - `datlas:"nonzero"` rejects empty and zero values (`""`, `0`, `false`, `[]`, `{}`, `null`, the zero time)
   and makes the field required. Logical keys are always nonzero.
+- `datlas:"elem=nonzero"` applies the same rule to every element of a slice or array field, or every
+  value of a map field (e.g. `[a, ""]` is rejected for `[]string`). It does not make the field itself
+  required or non-empty; combine it with `nonzero` for that: `datlas:"nonzero,elem=nonzero"`.
+  The element type must support `nonzero` (types implementing `encoding.TextUnmarshaler` are not supported yet).
 - Unknown fields, missing required fields, type mismatches, out-of-range numbers, malformed YAML,
   duplicate logical keys, broken references, invalid enum values and YAML files without a schema are errors.
 - Supported field types: strings, integers, floats, bools, `[]byte` (written as a string), `time.Time`

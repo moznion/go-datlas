@@ -587,6 +587,10 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 			valid = false
 			continue
 		}
+		if f.constraints.elemNonzero && !c.nonzeroElems(f.v.Type(), e.value, f.yamlName) {
+			valid = false
+			continue
+		}
 		var captured []RefValue
 		outer := c.capture
 		if ref := c.refs[f.v]; ref != nil {
@@ -665,6 +669,48 @@ func (c *compiler) textValue(t types.Type, n ast.Node, forceString bool) (string
 	c.texts = append(c.texts, textCheck{typ: t, text: s, pos: c.pos(n)})
 	c.usesText = true
 	return fmt.Sprintf("%s[%s](%s)", c.textFunc, c.im.TypeString(t), strconv.Quote(s)), true
+}
+
+// nonzeroElems reports, for the elem=nonzero constraint, every element of the sequence n
+// (or value of the mapping n) that is empty or zero, and whether there was none.
+// Values of the wrong shape are left to value, which reports them.
+func (c *compiler) nonzeroElems(t types.Type, n ast.Node, field string) bool {
+	n, _ = c.resolve(n, 0)
+	if n == nil {
+		return false
+	}
+	ok := true
+	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Slice, *types.Array:
+		seq, isSeq := n.(*ast.SequenceNode)
+		if !isSeq {
+			return true
+		}
+		elem := u.(interface{ Elem() types.Type }).Elem()
+		for i, v := range seq.Values {
+			if c.isZero(elem, v) {
+				c.errorf(v, "element %d of field %q must not be empty or zero", i, field)
+				ok = false
+			}
+		}
+	case *types.Map:
+		switch n.(type) {
+		case *ast.MappingNode, *ast.MappingValueNode:
+		default:
+			return true
+		}
+		entries, valid := c.mapping(n, 0)
+		if !valid {
+			return false
+		}
+		for _, e := range entries {
+			if c.isZero(u.Elem(), e.value) {
+				c.errorf(e.value, "value of key %q in field %q must not be empty or zero", e.key, field)
+				ok = false
+			}
+		}
+	}
+	return ok
 }
 
 // isZero reports whether n denotes the zero value of t (or an empty slice or map).
