@@ -1,5 +1,14 @@
 # Changelog
 
+## [v0.0.2](https://github.com/moznion/go-datlas/compare/v0.0.1...v0.0.2) - 2026-11-19
+
+- feat: support datlas:"nonzero" on encoding.TextUnmarshaler types by @moznion in https://github.com/moznion/go-datlas/pull/11
+- feat: add datlas:"elem=nonzero" for elements of slices, arrays and maps by @moznion in https://github.com/moznion/go-datlas/pull/12
+- feat: support uniqueness constraints besides the logical key by @moznion in https://github.com/moznion/go-datlas/pull/13
+- feat: support encoding.TextUnmarshaler types as logical keys by @moznion in https://github.com/moznion/go-datlas/pull/14
+- feat: support encoding.TextUnmarshaler types in datlas:"unique" by @moznion in https://github.com/moznion/go-datlas/pull/16
+- docs: complete the README and example for v0.0.2 features by @moznion in https://github.com/moznion/go-datlas/pull/17
+
 ## [v0.0.1](https://github.com/moznion/go-datlas/commits/v0.0.1) - 2026-11-18
 
 - ci: pass fixture.yaml config to datlas fixture check by @moznion in https://github.com/moznion/go-datlas/pull/1
