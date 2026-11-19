@@ -85,7 +85,7 @@ func TestUniqueSchemaErrors(t *testing.T) {
 		"X string `yaml:\"x\" datlas:\"unique=\"`":              `invalid unique group name ""`,
 		"X string `yaml:\"x\" datlas:\"unique=1a\"`":            `invalid unique group name "1a"`,
 		"X string `yaml:\"x\" datlas:\"unique,unique=g\"`":      "has both unique and unique=g",
-		"X string `yaml:\"x\" datlas:\"uniq\"`":                 `unknown datlas tag option "uniq" (available: nonzero, unique, unique=<group>)`,
+		"X string `yaml:\"x\" datlas:\"uniq\"`":                 `unknown datlas tag option "uniq" (available: nonzero, elem=nonzero, unique, unique=<group>)`,
 	} {
 		src := strings.Replace(moneySchema, "\tRaw    []byte", "\t"+field+"\n\tRaw    []byte", 1)
 		src = strings.Replace(src, "import (\n", "import (\n\t\"time\"\n", 1)

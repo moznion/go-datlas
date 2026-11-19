@@ -21,6 +21,8 @@ type constraints struct {
 	// uniqueGroup names the group of fields whose combination is distinct within the dataset
 	// (`unique=<name>`).
 	uniqueGroup string
+	// elemNonzero applies nonzero to every element of a slice or array, or every value of a map.
+	elemNonzero bool
 }
 
 func parseConstraints(tag string) (constraints, error) {
@@ -42,9 +44,13 @@ func parseConstraints(tag string) (constraints, error) {
 				return c, fmt.Errorf("invalid unique group name %q in %s tag (letters, digits, underscores and hyphens, starting with a letter, like dataset names)", name, ConstraintTagKey)
 			}
 			c.uniqueGroup = name
+		case opt == "elem=nonzero":
+			c.elemNonzero = true
+		case strings.HasPrefix(opt, "elem="):
+			return c, fmt.Errorf("unknown %s tag option %q (available for elem: nonzero)", ConstraintTagKey, opt)
 		case opt == "":
 		default:
-			return c, fmt.Errorf("unknown %s tag option %q (available: nonzero, unique, unique=<group>)", ConstraintTagKey, opt)
+			return c, fmt.Errorf("unknown %s tag option %q (available: nonzero, elem=nonzero, unique, unique=<group>)", ConstraintTagKey, opt)
 		}
 	}
 	if c.unique && c.uniqueGroup != "" {
@@ -201,14 +207,37 @@ func isBytes(t types.Type) bool {
 	return ok && b.Kind() == types.Uint8
 }
 
+// elemNonzeroSupported reports why the elem=nonzero constraint cannot be checked for t, or nil.
+// It needs a slice, array or map whose element (value) type supports nonzero.
+func elemNonzeroSupported(t types.Type, enums *loader.Enums) error {
+	t = types.Unalias(t)
+	if isBytes(t) || isText(t, enums) {
+		return fmt.Errorf("elem=nonzero is not supported for type %s, which is written as a single value", t)
+	}
+	var elem types.Type
+	switch u := t.Underlying().(type) {
+	case *types.Slice:
+		elem = u.Elem()
+	case *types.Array:
+		elem = u.Elem()
+	case *types.Map:
+		elem = u.Elem()
+	default:
+		return fmt.Errorf("elem=nonzero needs a slice, array or map field, not %s", t)
+	}
+	if !nonzeroSupported(elem, enums) {
+		return fmt.Errorf("elem=nonzero is not supported for element type %s", elem)
+	}
+	return nil
+}
+
 // nonzeroSupported reports whether the nonzero constraint can be checked for t.
+// Values of types decoded with encoding.TextUnmarshaler are checked after decoding, by runTextChecks:
+// whether a text denotes the zero value is known only to the type's UnmarshalText.
 func nonzeroSupported(t types.Type, enums *loader.Enums) bool {
 	t = types.Unalias(t)
-	if isTime(t) || isDuration(t) {
+	if isTime(t) || isDuration(t) || isText(t, enums) {
 		return true
-	}
-	if isText(t, enums) {
-		return false
 	}
 	switch t.Underlying().(type) {
 	case *types.Basic, *types.Pointer, *types.Slice, *types.Map:
@@ -279,6 +308,12 @@ func (sc *supportChecker) checkStruct(st *types.Struct, path string, names map[s
 		if f.constraints.nonzero && !nonzeroSupported(f.v.Type(), sc.enums) {
 			errs = append(errs, fmt.Errorf("%s: nonzero is not supported for type %s", fpath, f.v.Type()))
 			continue
+		}
+		if f.constraints.elemNonzero {
+			if err := elemNonzeroSupported(f.v.Type(), sc.enums); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", fpath, err))
+				continue
+			}
 		}
 		if f.tag.inline {
 			inner, ok := types.Unalias(f.v.Type()).Underlying().(*types.Struct)
