@@ -199,12 +199,6 @@ func (o *Other) UnmarshalText(b []byte) error { copy(o[:], b); return nil }
 			want:   "a logical key of a type implementing encoding.TextUnmarshaler must be comparable, not example.com/datlastest.Tags",
 		},
 		{
-			// Comparable text types can be keys, but unique still compares literals, so they are rejected there.
-			name:   "unique on a comparable text type",
-			schema: "//datlas:master items\ntype Item struct {\n\tCode string `master:\"key\"`\n\tID ID `datlas:\"unique\"`\n}\n",
-			want:   "unique is not supported for data.ID: values of types implementing encoding.TextUnmarshaler can only be compared after decoding",
-		},
-		{
 			name:   "reference of another text type",
 			schema: "//datlas:master items\ntype Item struct {\n\tID ID `master:\"key\"`\n}\n\n//datlas:master grants\ntype Grant struct {\n\tCode string `master:\"key\"`\n\tItem Other `master:\"ref=items\"`\n}\n",
 			want:   `reference of type example.com/datlastest.Other cannot refer to the key of type example.com/datlastest.ID of dataset "items"`,

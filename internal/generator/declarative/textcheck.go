@@ -78,6 +78,7 @@ func %[1]s() []string {
 			strconv.Quote(c.zeroErr))
 	}
 	renderTextKeyChecks(&body, im, fmtPkg, decodeFunc, datasets, enums)
+	renderTextUniqueChecks(&body, im, fmtPkg, decodeFunc, datasets)
 	body.WriteString("return datlasErrs\n}\n")
 	fmt.Fprintf(&body, `
 // %s decodes s, reporting whether it is valid. It exists only while datlas validates values.
@@ -256,5 +257,65 @@ datlasAdd := func(k datlasKey, pos, display string) {
 				decode, typ, strconv.Quote(u.rv.Text), strconv.Quote(msg))
 		}
 		b.WriteString("}\n")
+	}
+}
+
+// renderTextUniqueChecks renders the statements of the check function comparing the values of
+// uniqueness constraints with fields decoded with encoding.TextUnmarshaler by value, since different
+// texts can denote the same value. The other fields of a group are compared by their literals, as in
+// checkUniques. Values that fail to decode are skipped; they are reported as invalid.
+func renderTextUniqueChecks(b *bytes.Buffer, im *output.Imports, fmtPkg, decode string, datasets []*Dataset) {
+	for _, ds := range datasets {
+		for i, u := range ds.Schema.Uniques {
+			if !u.Text {
+				continue
+			}
+			var values []UniqueValue
+			for _, r := range ds.Records {
+				values = append(values, r.Uniques[i]...)
+			}
+			if len(values) == 0 {
+				continue
+			}
+			// The type of each part: text parts by their decoded type, the others as their literal.
+			// Every value of a constraint has the same shape, so the first one gives it.
+			var fields []string
+			for j, p := range values[0].Parts {
+				typ := "string"
+				if p.Type != nil {
+					typ = im.TypeString(p.Type)
+				}
+				fields = append(fields, fmt.Sprintf("v%d %s", j, typ))
+			}
+			fmt.Fprintf(b, `{
+type datlasUnique struct{ %s }
+datlasSeen := map[datlasUnique]string{}
+datlasAdd := func(k datlasUnique, pos, display string) {
+	if prev, dup := datlasSeen[k]; dup {
+		datlasErrs = append(datlasErrs, %s.Sprintf("%%s: duplicate %%s = %%s (first defined at %%s)", pos, %s, display, prev))
+		return
+	}
+	datlasSeen[k] = pos
+}
+`, strings.Join(fields, "; "), fmtPkg, strconv.Quote(u.describe()))
+			for _, v := range values {
+				var decls, conds, vals []string
+				for j, p := range v.Parts {
+					if p.Type != nil {
+						decls = append(decls, fmt.Sprintf("v%d, ok%d := %s[%s](%s)", j, j, decode, im.TypeString(p.Type), strconv.Quote(p.Text)))
+						conds = append(conds, fmt.Sprintf("ok%d", j))
+						vals = append(vals, fmt.Sprintf("v%d", j))
+					} else {
+						vals = append(vals, strconv.Quote(p.Lit))
+					}
+				}
+				add := fmt.Sprintf("datlasAdd(datlasUnique{%s}, %s, %s)", strings.Join(vals, ", "), strconv.Quote(v.Pos), strconv.Quote(v.Lit))
+				if len(conds) > 0 {
+					add = fmt.Sprintf("if %s {\n%s\n}", strings.Join(conds, " && "), add)
+				}
+				fmt.Fprintf(b, "{\n%s\n%s\n}\n", strings.Join(decls, "\n"), add)
+			}
+			b.WriteString("}\n")
+		}
 	}
 }

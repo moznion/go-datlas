@@ -75,12 +75,10 @@ func TestUnique(t *testing.T) {
 
 func TestUniqueSchemaErrors(t *testing.T) {
 	for field, want := range map[string]string{
-		"X Money `yaml:\"x\" datlas:\"unique\"`":                "unique is not supported for data.Money: values of types implementing encoding.TextUnmarshaler can only be compared after decoding",
-		"X []Money `yaml:\"x\" datlas:\"unique\"`":              "unique is not supported for data.Money",
-		"X float64 `yaml:\"x\" datlas:\"unique\"`":              "unique requires a string, integer or bool type (or a slice of one), not float64",
-		"X *string `yaml:\"x\" datlas:\"unique\"`":              "unique requires a string, integer or bool type (or a slice of one), not *string",
-		"X []string `yaml:\"x\" datlas:\"unique=g\"`":           "unique requires a string, integer or bool type, not []string",
-		"X time.Time `yaml:\"x\" datlas:\"unique\"`":            "unique requires a string, integer or bool type (or a slice of one), not time.Time",
+		"X float64 `yaml:\"x\" datlas:\"unique\"`":              "unique requires a string, integer or bool type (or a slice of one) (or a comparable type implementing encoding.TextUnmarshaler), not float64",
+		"X *string `yaml:\"x\" datlas:\"unique\"`":              "unique requires a string, integer or bool type (or a slice of one) (or a comparable type implementing encoding.TextUnmarshaler), not *string",
+		"X []string `yaml:\"x\" datlas:\"unique=g\"`":           "unique requires a string, integer or bool type (or a comparable type implementing encoding.TextUnmarshaler), not []string",
+		"X time.Time `yaml:\"x\" datlas:\"unique\"`":            "unique requires a string, integer or bool type (or a slice of one) (or a comparable type implementing encoding.TextUnmarshaler), not time.Time",
 		"X struct{ Y string `datlas:\"unique\"` } `yaml:\"x\"`": "unique must be on a field of Price or of a struct inlined into it",
 		"X string `yaml:\"x\" datlas:\"unique=\"`":              `invalid unique group name ""`,
 		"X string `yaml:\"x\" datlas:\"unique=1a\"`":            `invalid unique group name "1a"`,

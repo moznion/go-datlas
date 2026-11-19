@@ -39,7 +39,17 @@ type Record struct {
 	Pos string
 	// Uniques are the values of the uniqueness constraints, indexed like Schema.Uniques.
 	// A constraint whose fields are absent from the record (pointers, omitempty) has no value.
-	Uniques [][]RefValue
+	Uniques [][]UniqueValue
+}
+
+// UniqueValue is one value of a uniqueness constraint: an element of a slice field tagged `unique`,
+// the value of a field tagged `unique`, or the combination of the fields of a `unique=<group>`.
+type UniqueValue struct {
+	// Lit is the value as reported in errors: the Go literals (or quoted texts) of Parts, joined.
+	Lit string
+	Pos string
+	// Parts are the values of the fields, one per field of the constraint (one for Elements).
+	Parts []RefValue
 }
 
 // RefValue is one value of a reference field.
@@ -196,11 +206,16 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 
 // uniqueValues returns the values of u in one record: every element of a unique slice, or the
 // combined value of the fields. A field absent from the record gives no value.
-func uniqueValues(u Unique, values map[*types.Var][]RefValue, recordPos string) []RefValue {
+func uniqueValues(u Unique, values map[*types.Var][]RefValue, recordPos string) []UniqueValue {
 	if u.Elements {
-		return values[u.Fields[0]]
+		var out []UniqueValue
+		for _, v := range values[u.Fields[0]] {
+			out = append(out, UniqueValue{Lit: v.Lit, Pos: v.Pos, Parts: []RefValue{v}})
+		}
+		return out
 	}
 	var lits []string
+	var parts []RefValue
 	pos := recordPos
 	for _, f := range u.Fields {
 		vs, ok := values[f]
@@ -208,11 +223,12 @@ func uniqueValues(u Unique, values map[*types.Var][]RefValue, recordPos string) 
 			return nil
 		}
 		lits = append(lits, vs[0].Lit)
+		parts = append(parts, vs[0])
 		if len(u.Fields) == 1 {
 			pos = vs[0].Pos
 		}
 	}
-	return []RefValue{{Lit: strings.Join(lits, ", "), Pos: pos}}
+	return []UniqueValue{{Lit: strings.Join(lits, ", "), Pos: pos, Parts: parts}}
 }
 
 func countDocs(f *ast.File) int {

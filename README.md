@@ -416,9 +416,10 @@ therefore written with their numeric values (`tier: 2`), not their text form.
   no element appears twice, in one record or in different records. `datlas:"unique=<group>"` on several
   fields makes their combination distinct (fields with the same group name form one constraint).
   Values absent from a record (`omitempty`) are not compared. Unique fields must be fields of the record
-  or of a struct inlined into it, of a string, integer or bool type (or, with `unique`, a slice of one);
-  types implementing `encoding.TextUnmarshaler` are not supported yet, since they can only be compared
-  after decoding. The constraint only validates the data; the generated code is the same.
+  or of a struct inlined into it, of a string, integer or bool type, or a comparable type implementing
+  `encoding.TextUnmarshaler` (or, with `unique`, a slice of one). Values of such types are compared by
+  decoded value, like logical keys: texts differing only in case are duplicate UUIDs.
+  The constraint only validates the data; the generated code is the same.
 - Unknown fields, missing required fields, type mismatches, out-of-range numbers, malformed YAML,
   duplicate logical keys, broken references, invalid enum values and YAML files without a schema are errors.
 - Supported field types: strings, integers, floats, bools, `[]byte` (written as a string), `time.Time`
