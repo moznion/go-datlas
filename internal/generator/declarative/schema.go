@@ -16,6 +16,11 @@ const ConstraintTagKey = "datlas"
 // constraints are the parsed form of a `datlas:"..."` struct tag.
 type constraints struct {
 	nonzero bool
+	// unique makes the values of the field distinct within the dataset (`unique`).
+	unique bool
+	// uniqueGroup names the group of fields whose combination is distinct within the dataset
+	// (`unique=<name>`).
+	uniqueGroup string
 	// elemNonzero applies nonzero to every element of a slice or array, or every value of a map.
 	elemNonzero bool
 }
@@ -31,14 +36,25 @@ func parseConstraints(tag string) (constraints, error) {
 		switch {
 		case opt == "nonzero":
 			c.nonzero = true
+		case opt == "unique":
+			c.unique = true
+		case strings.HasPrefix(opt, "unique="):
+			name := strings.TrimPrefix(opt, "unique=")
+			if !validDatasetName(name) {
+				return c, fmt.Errorf("invalid unique group name %q in %s tag (letters, digits, underscores and hyphens, starting with a letter, like dataset names)", name, ConstraintTagKey)
+			}
+			c.uniqueGroup = name
 		case opt == "elem=nonzero":
 			c.elemNonzero = true
 		case strings.HasPrefix(opt, "elem="):
 			return c, fmt.Errorf("unknown %s tag option %q (available for elem: nonzero)", ConstraintTagKey, opt)
 		case opt == "":
 		default:
-			return c, fmt.Errorf("unknown %s tag option %q (available: nonzero, elem=nonzero)", ConstraintTagKey, opt)
+			return c, fmt.Errorf("unknown %s tag option %q (available: nonzero, elem=nonzero, unique, unique=<group>)", ConstraintTagKey, opt)
 		}
+	}
+	if c.unique && c.uniqueGroup != "" {
+		return c, fmt.Errorf("%s tag has both unique and unique=%s; use one of them", ConstraintTagKey, c.uniqueGroup)
 	}
 	return c, nil
 }

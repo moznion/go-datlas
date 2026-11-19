@@ -299,7 +299,7 @@ func TestElemNonzero(t *testing.T) {
 		"X []byte `datlas:\"elem=nonzero\"`":            "elem=nonzero is not supported for type []byte",
 		"X []struct{ Y int } `datlas:\"elem=nonzero\"`": "elem=nonzero is not supported for element type struct{Y int}",
 		"X []string `datlas:\"elem=nonempty\"`":         `unknown datlas tag option "elem=nonempty" (available for elem: nonzero)`,
-		"X []string `datlas:\"each=nonzero\"`":          `unknown datlas tag option "each=nonzero" (available: nonzero, elem=nonzero)`,
+		"X []string `datlas:\"each=nonzero\"`":          `unknown datlas tag option "each=nonzero" (available: nonzero, elem=nonzero, unique, unique=<group>)`,
 	} {
 		src := strings.Replace(moneySchema, "Raw    []byte", field+"\n\tRaw    []byte", 1)
 		_, err := generate(t, MasterData, map[string]string{"schema.go": src, "prices.yaml": "[]\n"})
