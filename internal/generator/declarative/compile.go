@@ -29,6 +29,10 @@ type Record struct {
 	Expr string
 	// Keys are the Go literals of the logical key fields, in declaration order.
 	Keys []string
+	// KeyTexts are the texts of the logical key fields decoded with encoding.TextUnmarshaler,
+	// in declaration order; empty for the other key fields. Such keys are compared by decoded
+	// value (see runTextChecks), since different texts can denote the same value.
+	KeyTexts []string
 	// Refs are the values of reference fields, checked once every dataset is compiled.
 	Refs []RefValue
 	// Pos is the position of the record in its YAML file.
@@ -38,8 +42,14 @@ type Record struct {
 // RefValue is one value of a reference field.
 type RefValue struct {
 	Ref *Ref
+	// Lit is the Go literal of the value, or the quoted text of a value decoded with
+	// encoding.TextUnmarshaler (Text).
 	Lit string
 	Pos string
+	// Type is the type of a value decoded with encoding.TextUnmarshaler, and Text its text.
+	// Such values are checked by runTextChecks; Type is nil for the other values.
+	Type types.Type
+	Text string
 }
 
 // textCheck is a value of a type decoded with encoding.TextUnmarshaler.
@@ -75,6 +85,8 @@ type compiler struct {
 	recordRefs []RefValue
 	// recordKeys collects the key literals of the record being compiled.
 	recordKeys map[*types.Var]string
+	// recordKeyTexts collects the texts of the keys decoded with encoding.TextUnmarshaler.
+	recordKeyTexts map[*types.Var]string
 }
 
 // anchorDef is a YAML anchor. An anchor name may be defined again; an alias refers to
@@ -145,6 +157,7 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 	for _, item := range seq.Values {
 		c.recordRefs = nil
 		c.recordKeys = map[*types.Var]string{}
+		c.recordKeyTexts = map[*types.Var]string{}
 		fields, ok := c.structFields(schema.Struct, item, 1, true)
 		if !ok {
 			continue
@@ -152,6 +165,7 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 		r := Record{Expr: "{\n" + joinFields(fields) + "}", Pos: c.pos(item), Refs: c.recordRefs}
 		for _, k := range schema.Keys {
 			r.Keys = append(r.Keys, c.recordKeys[k])
+			r.KeyTexts = append(r.KeyTexts, c.recordKeyTexts[k])
 		}
 		records = append(records, r)
 	}
@@ -592,6 +606,7 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 		if ref := c.refs[f.v]; ref != nil {
 			c.capture = &captured
 		}
+		texts := len(c.texts)
 		v, ok := c.value(f.v.Type(), e.value, false, depth+1)
 		c.capture = outer
 		if !ok {
@@ -600,6 +615,9 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 		}
 		if isKey {
 			c.recordKeys[f.v] = v
+			if isText(f.v.Type(), c.enums) && len(c.texts) > texts {
+				c.recordKeyTexts[f.v] = c.texts[texts].text
+			}
 		}
 		for _, rv := range captured {
 			rv.Ref = c.refs[f.v]
@@ -664,6 +682,9 @@ func (c *compiler) textValue(t types.Type, n ast.Node, forceString bool) (string
 	}
 	c.texts = append(c.texts, textCheck{typ: t, text: s, pos: c.pos(n)})
 	c.usesText = true
+	if c.capture != nil {
+		*c.capture = append(*c.capture, RefValue{Lit: strconv.Quote(s), Pos: c.pos(n), Type: t, Text: s})
+	}
 	return fmt.Sprintf("%s[%s](%s)", c.textFunc, c.im.TypeString(t), strconv.Quote(s)), true
 }
 

@@ -411,6 +411,8 @@ Code string `yaml:"code" master:"key"`
 ```
 
 This logical key is used to detect duplicates during generation.
+Keys of types implementing `encoding.TextUnmarshaler` (e.g. UUIDs) are compared by decoded value,
+since different texts can denote the same value; the program validating such values does it.
 
 The generator should fail if duplicate logical keys are found.
 
