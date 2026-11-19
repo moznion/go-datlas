@@ -298,7 +298,6 @@ func TestElemNonzero(t *testing.T) {
 		"X string `datlas:\"elem=nonzero\"`":            "elem=nonzero needs a slice, array or map field, not string",
 		"X []byte `datlas:\"elem=nonzero\"`":            "elem=nonzero is not supported for type []byte",
 		"X []struct{ Y int } `datlas:\"elem=nonzero\"`": "elem=nonzero is not supported for element type struct{Y int}",
-		"X []Money `datlas:\"elem=nonzero\"`":           "elem=nonzero is not supported for element type example.com/datlastest.Money",
 		"X []string `datlas:\"elem=nonempty\"`":         `unknown datlas tag option "elem=nonempty" (available for elem: nonzero)`,
 		"X []string `datlas:\"each=nonzero\"`":          `unknown datlas tag option "each=nonzero" (available: nonzero, elem=nonzero)`,
 	} {
@@ -306,6 +305,119 @@ func TestElemNonzero(t *testing.T) {
 		_, err := generate(t, MasterData, map[string]string{"schema.go": src, "prices.yaml": "[]\n"})
 		mustFail(t, err, want)
 	}
+}
+
+// idSchema has text types whose zero value can be written: ID (an array, like a UUID) and Money (a struct).
+const idSchema = `package data
+
+import (
+	"encoding/hex"
+	"errors"
+	"strings"
+)
+
+// ID is a two-byte identifier written in hex; "0000" decodes to the zero value.
+type ID [2]byte
+
+func (id *ID) UnmarshalText(b []byte) error {
+	if len(b) != 4 {
+		return errors.New("must be 4 hex digits")
+	}
+	_, err := hex.Decode(id[:], b)
+	return err
+}
+
+// Money is a decimal amount decoded from text; no text decodes to the zero value.
+type Money struct{ text string }
+
+func (m *Money) UnmarshalText(b []byte) error {
+	if !strings.Contains(string(b), ".") {
+		return errors.New("missing decimal point")
+	}
+	m.text = string(b)
+	return nil
+}
+
+//datlas:seed items
+type Item struct {
+	Name   string ` + "`yaml:\"name\" seed:\"key\"`" + `
+	ID     ID     ` + "`yaml:\"id\" datlas:\"nonzero\"`" + `
+	Amount Money  ` + "`yaml:\"amount\" datlas:\"nonzero\"`" + `
+	Owner  ID     ` + "`yaml:\"owner\"`" + `
+}
+`
+
+// nonzero on a type decoded with encoding.TextUnmarshaler rejects values that decode to the zero value.
+func TestNonzeroTextUnmarshaler(t *testing.T) {
+	path, err := generate(t, SeedData, map[string]string{
+		"schema.go":       idSchema,
+		"demo/items.yaml": "- {name: a, id: 0a0b, amount: 0.00, owner: '0000'}\n",
+		"use.go":          "package data\n\nvar _ = DemoItems\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.TypeCheck(t, filepath.Dir(path), ".")
+	if matches, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".datlas-check-*")); len(matches) > 0 {
+		t.Fatalf("temporary files were left behind: %v", matches)
+	}
+
+	for data, want := range map[string]string{
+		// The text is not empty, but decodes to the zero value.
+		"- {name: a, id: '0000', amount: 1.00, owner: 0a0b}\n": `demo/items.yaml:1:17: field "id" must not be empty or zero`,
+		// A value that fails to decode is reported as invalid, not as zero.
+		"- {name: a, id: '000', amount: 1.00, owner: 0a0b}\n": `invalid data.ID "000": must be 4 hex digits`,
+		// Empty and missing values are rejected without decoding, like other types.
+		"- {name: a, id: null, amount: 1.00, owner: 0a0b}\n": `field "id" must not be empty or zero`,
+		"- {name: a, amount: 1.00, owner: 0a0b}\n":           `missing required field "id"`,
+	} {
+		_, err := generate(t, SeedData, map[string]string{"schema.go": idSchema, "demo/items.yaml": data})
+		mustFail(t, err, want)
+	}
+
+	// Every zero value is reported, not only the first one.
+	_, err = generate(t, SeedData, map[string]string{
+		"schema.go":       idSchema,
+		"demo/items.yaml": "- {name: a, id: '0000', amount: 1.00, owner: 0a0b}\n- {name: b, id: '0000', amount: 1.00, owner: 0a0b}\n",
+	})
+	mustFail(t, err, `demo/items.yaml:1:17: field "id" must not be empty or zero`)
+	mustFail(t, err, `demo/items.yaml:2:17: field "id" must not be empty or zero`)
+}
+
+// elem=nonzero on elements decoded with encoding.TextUnmarshaler rejects elements that decode to the zero value.
+func TestElemNonzeroTextUnmarshaler(t *testing.T) {
+	schema := strings.Replace(idSchema, "\tOwner  ID", "\tIDs    []ID          "+"`yaml:\"ids\" datlas:\"nonzero,elem=nonzero\"`"+
+		"\n\tByName map[string]ID "+"`yaml:\"by_name,omitempty\" datlas:\"elem=nonzero\"`"+"\n\tOwner  ID", 1)
+	if _, err := generate(t, SeedData, map[string]string{
+		"schema.go":       schema,
+		"demo/items.yaml": "- {name: a, id: 0a0b, amount: 1.00, owner: '0000', ids: [0a0b, 0c0d], by_name: {x: 0a0b}}\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for data, want := range map[string]string{
+		// The texts are not empty, but decode to the zero value.
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: [0a0b, '0000']}\n":               `demo/items.yaml:1:62: element 1 of field "ids" must not be empty or zero`,
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: [0a0b], by_name: {x: '0000'}}\n": `value of key "x" in field "by_name" must not be empty or zero`,
+		// An anchor reused by an alias is reported for each element.
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: [&z '0000', *z]}\n": `element 1 of field "ids" must not be empty or zero`,
+		// A value that fails to decode is reported as invalid, not as zero.
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: ['000']}\n": `invalid data.ID "000": must be 4 hex digits`,
+		// Empty elements are rejected without decoding.
+		"- {name: a, id: 0a0b, amount: 1.00, owner: 0a0b, ids: [0a0b, null]}\n": `element 1 of field "ids" must not be empty or zero`,
+	} {
+		_, err := generate(t, SeedData, map[string]string{"schema.go": schema, "demo/items.yaml": data})
+		mustFail(t, err, want)
+	}
+
+	// The anchor's own element is reported too, and a zero field still gets its field error.
+	_, err := generate(t, SeedData, map[string]string{
+		"schema.go":       schema,
+		"demo/items.yaml": "- {name: a, id: '0000', amount: 1.00, owner: 0a0b, ids: [&z '0000', *z]}\n",
+	})
+	mustFail(t, err, `field "id" must not be empty or zero`)
+	mustFail(t, err, `element 0 of field "ids" must not be empty or zero`)
+	mustFail(t, err, `element 1 of field "ids" must not be empty or zero`)
 }
 
 func TestReferences(t *testing.T) {

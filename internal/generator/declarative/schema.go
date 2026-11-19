@@ -216,13 +216,12 @@ func elemNonzeroSupported(t types.Type, enums *loader.Enums) error {
 }
 
 // nonzeroSupported reports whether the nonzero constraint can be checked for t.
+// Values of types decoded with encoding.TextUnmarshaler are checked after decoding, by runTextChecks:
+// whether a text denotes the zero value is known only to the type's UnmarshalText.
 func nonzeroSupported(t types.Type, enums *loader.Enums) bool {
 	t = types.Unalias(t)
-	if isTime(t) || isDuration(t) {
+	if isTime(t) || isDuration(t) || isText(t, enums) {
 		return true
-	}
-	if isText(t, enums) {
-		return false
 	}
 	switch t.Underlying().(type) {
 	case *types.Basic, *types.Pointer, *types.Slice, *types.Map:

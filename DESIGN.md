@@ -464,7 +464,8 @@ Generation fails for:
 - duplicate logical keys
 - references to missing keys
 - values outside of an enum
-- empty values of fields tagged `datlas:"nonzero"`, and empty elements of fields tagged `datlas:"elem=nonzero"`
+- empty values of fields tagged `datlas:"nonzero"` (for `encoding.TextUnmarshaler` types, values that decode to the zero value),
+  and empty elements of fields tagged `datlas:"elem=nonzero"`
 - YAML files that no schema declares
 
 Every field is required unless it is a pointer or its `yaml` tag has `omitempty`.

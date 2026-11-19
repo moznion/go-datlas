@@ -18,6 +18,7 @@ import (
 )
 
 // runTextChecks validates the values of types decoded with encoding.TextUnmarshaler.
+// Values of fields tagged nonzero must also not decode to the zero value of their type.
 //
 // The generator cannot run the user's UnmarshalText methods itself. Instead it adds, through a
 // build overlay, a function to the schema package that decodes every value (so unexported types
@@ -47,19 +48,26 @@ func runTextChecks(pkg *packages.Package, pkgDir, genPath string, genSrc []byte,
 	im := output.NewImports(pkg.PkgPath, scope.Names()...)
 	fmtPkg := im.Add("fmt", "fmt")
 	encPkg := im.Add("encoding", "encoding")
+	reflectPkg := im.Add("reflect", "reflect")
 	var body bytes.Buffer
-	fmt.Fprintf(&body, `// %[1]s reports the values that fail to decode. It exists only while datlas validates them.
+	fmt.Fprintf(&body, `// %[1]s reports the values that fail to decode, or decode to the zero value of their type
+// in a nonzero field or as an element of an elem=nonzero field. It exists only while datlas validates them.
 func %[1]s() []string {
 	var datlasErrs []string
-	datlasCheck := func(pos, typ string, u %[2]s.TextUnmarshaler, text string) {
+	datlasCheck := func(pos, typ string, u %[2]s.TextUnmarshaler, text, zeroErr string) {
 		if err := u.UnmarshalText([]byte(text)); err != nil {
 			datlasErrs = append(datlasErrs, %[3]s.Sprintf("%%s: invalid %%s %%q: %%v", pos, typ, text, err))
+			return
+		}
+		if zeroErr != "" && %[4]s.ValueOf(u).Elem().IsZero() {
+			datlasErrs = append(datlasErrs, pos+": "+zeroErr)
 		}
 	}
-`, checkFunc, encPkg, fmtPkg)
+`, checkFunc, encPkg, fmtPkg, reflectPkg)
 	for _, c := range checks {
-		fmt.Fprintf(&body, "datlasCheck(%s, %s, new(%s), %s)\n",
-			strconv.Quote(c.pos), strconv.Quote(typeName(c.typ)), im.TypeString(c.typ), strconv.Quote(c.text))
+		fmt.Fprintf(&body, "datlasCheck(%s, %s, new(%s), %s, %s)\n",
+			strconv.Quote(c.pos), strconv.Quote(typeName(c.typ)), im.TypeString(c.typ), strconv.Quote(c.text),
+			strconv.Quote(c.zeroErr))
 	}
 	body.WriteString("return datlasErrs\n}\n")
 
