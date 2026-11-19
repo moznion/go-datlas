@@ -1,0 +1,14 @@
+- id: 0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a23
+  code: tokyo
+  country: JP
+  name: Tokyo
+
+- id: 0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a24
+  code: osaka
+  country: JP
+  name: Osaka
+
+- id: 0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a25
+  code: virginia
+  country: US
+  name: Virginia

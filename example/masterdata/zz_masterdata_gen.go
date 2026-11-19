@@ -3,7 +3,10 @@
 package masterdata
 
 import (
+	"sync"
 	"time"
+
+	"github.com/moznion/go-datlas/example/model"
 )
 
 // MasterDatasets returns the names of the master data datasets in dependency order: every dataset comes
@@ -11,7 +14,7 @@ import (
 // Datasets without an order between them are in name order. Datasets referring to each other
 // in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
 func MasterDatasets() []string {
-	return []string{"plans", "roles", "permissions"}
+	return []string{"regions", "plans", "roles", "permissions"}
 }
 
 // Logical keys of Roles (Code).
@@ -139,6 +142,9 @@ func datlasMasterPlans0() PlanDefinition {
 		PriceYen: 0,
 		Trial:    0,
 		Features: []string{"basic"},
+		Regions: []model.UUID{
+			datlasMasterText[model.UUID]("0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a23"),
+		},
 		Limits: PlanLimits{
 			Seats: 3,
 		},
@@ -147,12 +153,16 @@ func datlasMasterPlans0() PlanDefinition {
 
 func datlasMasterPlans1() PlanDefinition {
 	return PlanDefinition{
-		Code:        "pro",
-		Name:        "Pro",
-		Tier:        "business",
-		PriceYen:    1200,
-		Trial:       720 * time.Hour,
-		Features:    []string{"basic", "sso"},
+		Code:     "pro",
+		Name:     "Pro",
+		Tier:     "business",
+		PriceYen: 1200,
+		Trial:    720 * time.Hour,
+		Features: []string{"basic", "sso"},
+		Regions: []model.UUID{
+			datlasMasterText[model.UUID]("0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a23"),
+			datlasMasterText[model.UUID]("0191D3A0-7B1C-7C3E-9A4F-2B6D8E0F1A25"),
+		},
 		Description: datlasMasterPtr[string]("For growing teams.\n"),
 		Limits: PlanLimits{
 			Seats:   50,
@@ -161,4 +171,72 @@ func datlasMasterPlans1() PlanDefinition {
 	}
 }
 
+// Regions returns the master data "regions", compiled from regions.yaml.
+// Each call returns a new copy that the caller may modify freely.
+func Regions() []RegionDefinition {
+	return []RegionDefinition{
+		datlasMasterRegions0(),
+		datlasMasterRegions1(),
+		datlasMasterRegions2(),
+	}
+}
+
+// datlasMasterRegionsIndex maps the logical keys of Regions to the constructors of the records.
+var datlasMasterRegionsIndex = sync.OnceValue(func() map[model.UUID]func() RegionDefinition {
+	return map[model.UUID]func() RegionDefinition{
+		datlasMasterText[model.UUID]("0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a23"): datlasMasterRegions0,
+		datlasMasterText[model.UUID]("0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a24"): datlasMasterRegions1,
+		datlasMasterText[model.UUID]("0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a25"): datlasMasterRegions2,
+	}
+})
+
+// RegionByID returns the record of Regions whose ID equals the given value.
+// Each call returns a new copy.
+func RegionByID(key model.UUID) (RegionDefinition, bool) {
+	if f, ok := datlasMasterRegionsIndex()[key]; ok {
+		return f(), true
+	}
+	return RegionDefinition{}, false
+}
+
+func datlasMasterRegions0() RegionDefinition {
+	return RegionDefinition{
+		ID:      datlasMasterText[model.UUID]("0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a23"),
+		Code:    "tokyo",
+		Country: "JP",
+		Name:    "Tokyo",
+	}
+}
+
+func datlasMasterRegions1() RegionDefinition {
+	return RegionDefinition{
+		ID:      datlasMasterText[model.UUID]("0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a24"),
+		Code:    "osaka",
+		Country: "JP",
+		Name:    "Osaka",
+	}
+}
+
+func datlasMasterRegions2() RegionDefinition {
+	return RegionDefinition{
+		ID:      datlasMasterText[model.UUID]("0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a25"),
+		Code:    "virginia",
+		Country: "US",
+		Name:    "Virginia",
+	}
+}
+
 func datlasMasterPtr[T any](v T) *T { return &v }
+
+// datlasMasterText decodes s with encoding.TextUnmarshaler.
+// The values were validated when the code was generated, so decoding cannot fail.
+func datlasMasterText[T any, PT interface {
+	*T
+	UnmarshalText([]byte) error
+}](s string) T {
+	var v T
+	if err := PT(&v).UnmarshalText([]byte(s)); err != nil {
+		panic("datlas: " + err.Error())
+	}
+	return v
+}

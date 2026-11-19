@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/moznion/go-datlas/example/masterdata"
+	"github.com/moznion/go-datlas/example/model"
 )
 
 func TestMasterData(t *testing.T) {
@@ -39,5 +40,25 @@ func TestMasterDataIsImmutable(t *testing.T) {
 	}
 	if again, _ := masterdata.PlanByCode("pro"); *again.Description == "changed" {
 		t.Fatal("modifying a looked up value changed the master data")
+	}
+}
+
+func TestTextUnmarshalerKey(t *testing.T) {
+	var tokyo model.UUID
+	// Any case decodes to the same key.
+	if err := tokyo.UnmarshalText([]byte("0191D3A0-7B1C-7C3E-9A4F-2B6D8E0F1A23")); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := masterdata.RegionByID(tokyo)
+	if !ok || r.Code != "tokyo" {
+		t.Fatalf("RegionByID(%s) = %+v, %v", tokyo, r, ok)
+	}
+
+	pro, _ := masterdata.PlanByCode("pro")
+	if len(pro.Regions) != 2 || pro.Regions[0] != tokyo {
+		t.Fatalf("unexpected regions of pro: %v", pro.Regions)
+	}
+	if virginia, ok := masterdata.RegionByID(pro.Regions[1]); !ok || virginia.Code != "virginia" {
+		t.Fatalf("RegionByID(%s) = %+v, %v", pro.Regions[1], virginia, ok)
 	}
 }

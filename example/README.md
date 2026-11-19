@@ -99,11 +99,23 @@ in the same directory:
 - `permissions`: a composite key whose `role` must exist in `roles` (`master:"key,ref=roles"`).
 - `plans`: durations, slices, a pointer, a nested struct, an optional field (`omitempty`) and a
   `//datlas:enum` field. [plans.yaml](masterdata/plans.yaml) reuses a record with an anchor and a merge key.
+- `regions`: keyed by `model.UUID`, which implements `encoding.TextUnmarshaler`
+  ([model/uuid.go](model/uuid.go)). Keys are compared by decoded value, so `0191D3A0-...` and
+  `0191d3a0-...` are the same region. `code` is unique (`datlas:"unique"`), and so is the combination of
+  `country` and `name` (`datlas:"unique=place"` on both).
+
+Constraints in `plans`:
+
+- `name` is `datlas:"nonzero,unique"`: no two plans share a name.
+- `features` is `datlas:"elem=nonzero"`: `[basic, ""]` is rejected.
+- `regions` refers to `regions` (`master:"ref=regions"`) and is `datlas:"nonzero,elem=nonzero"`: the list
+  must not be empty, and the nil UUID is rejected. One reference is written in upper case.
 
 ```go
 admin, ok := masterdata.RoleByCode("admin")
 _, ok = masterdata.PermissionByRoleAndAction("admin", "write")
 plans := masterdata.Plans() // a fresh copy; modifying it does not change the master data
+region, ok := masterdata.RegionByID(id) // id is a model.UUID
 ```
 
 ## Seed Data
