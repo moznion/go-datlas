@@ -5,6 +5,7 @@
   price_yen: 0
   trial: 0s
   features: [basic]
+  regions: [0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a23]
   limits:
     seats: 3
 
@@ -15,6 +16,8 @@
   price_yen: 1200
   trial: 720h
   features: [basic, sso]
+  # Compared by decoded value, so the upper-case form refers to the same region.
+  regions: [0191d3a0-7b1c-7c3e-9a4f-2b6d8e0f1a23, 0191D3A0-7B1C-7C3E-9A4F-2B6D8E0F1A25]
   description: |
     For growing teams.
   limits:

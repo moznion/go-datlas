@@ -421,13 +421,16 @@ therefore written with their numeric values (`tier: 2`), not their text form.
   decoded value, like logical keys: texts differing only in case are duplicate UUIDs.
   The constraint only validates the data; the generated code is the same.
 - Unknown fields, missing required fields, type mismatches, out-of-range numbers, malformed YAML,
-  duplicate logical keys, broken references, invalid enum values and YAML files without a schema are errors.
+  duplicate logical keys, duplicate values of `unique` fields, empty values of `nonzero` fields and
+  elements of `elem=nonzero` fields, broken references, invalid enum values and YAML files without
+  a schema are errors.
 - Supported field types: strings, integers, floats, bools, `[]byte` (written as a string), `time.Time`
   (RFC 3339 or `2006-01-02`, UTC when no zone is given), `time.Duration` (`"1h30m"`), pointers, slices,
   arrays, maps with scalar keys, and nested structs (including `yaml:",inline"`).
   Anchors, aliases and merge keys (`<<`) work.
 - Types implementing `encoding.TextUnmarshaler` (e.g. decimal types) are supported: the generator
-  builds and runs a small program calling `UnmarshalText` on every value to validate it (and, for
-  `datlas:"nonzero"` fields, to check that the decoded value is not the zero value), and the
-  generated code decodes the values when the accessor is called.
+  builds and runs a small program calling `UnmarshalText` on every value to validate it, and the
+  generated code decodes the values when the accessor is called. The program also compares the
+  decoded values where texts are not enough: logical keys, references to them and `unique` fields
+  (duplicates), and `nonzero` and `elem=nonzero` fields (the zero value).
 

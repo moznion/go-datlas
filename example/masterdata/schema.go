@@ -1,7 +1,11 @@
 // Package masterdata holds the master data of the example application.
 package masterdata
 
-import "time"
+import (
+	"time"
+
+	"github.com/moznion/go-datlas/example/model"
+)
 
 //go:generate go tool datlas master
 
@@ -28,11 +32,12 @@ type PermissionDefinition struct {
 //datlas:master plans
 type PlanDefinition struct {
 	Code        string        `yaml:"code" master:"key"`
-	Name        string        `yaml:"name" datlas:"nonzero"`
+	Name        string        `yaml:"name" datlas:"nonzero,unique"`
 	Tier        Tier          `yaml:"tier"`
 	PriceYen    int           `yaml:"price_yen"`
 	Trial       time.Duration `yaml:"trial"`
-	Features    []string      `yaml:"features"`
+	Features    []string      `yaml:"features" datlas:"elem=nonzero"`
+	Regions     []model.UUID  `yaml:"regions" master:"ref=regions" datlas:"nonzero,elem=nonzero"`
 	Description *string       `yaml:"description"`
 	Limits      PlanLimits    `yaml:"limits"`
 }
@@ -40,4 +45,14 @@ type PlanDefinition struct {
 type PlanLimits struct {
 	Seats   int `yaml:"seats"`
 	Storage int `yaml:"storage_gb,omitempty"`
+}
+
+// RegionDefinition is keyed by a type implementing encoding.TextUnmarshaler.
+//
+//datlas:master regions
+type RegionDefinition struct {
+	ID      model.UUID `yaml:"id" master:"key"`
+	Code    string     `yaml:"code" datlas:"nonzero,unique"`
+	Country string     `yaml:"country" datlas:"nonzero,unique=place"`
+	Name    string     `yaml:"name" datlas:"nonzero,unique=place"`
 }
