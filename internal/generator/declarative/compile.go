@@ -33,6 +33,9 @@ type Record struct {
 	Refs []RefValue
 	// Pos is the position of the record in its YAML file.
 	Pos string
+	// Uniques are the values of the uniqueness constraints, indexed like Schema.Uniques.
+	// A constraint whose fields are absent from the record (pointers, omitempty) has no value.
+	Uniques [][]RefValue
 }
 
 // RefValue is one value of a reference field.
@@ -75,6 +78,10 @@ type compiler struct {
 	recordRefs []RefValue
 	// recordKeys collects the key literals of the record being compiled.
 	recordKeys map[*types.Var]string
+	// uniqueVars are the fields with a uniqueness constraint.
+	uniqueVars map[*types.Var]bool
+	// recordUniques collects the values of the unique fields of the record being compiled.
+	recordUniques map[*types.Var][]RefValue
 }
 
 // anchorDef is a YAML anchor. An anchor name may be defined again; an alias refers to
@@ -123,6 +130,12 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 	for i := range schema.Refs {
 		c.refs[schema.Refs[i].Field] = &schema.Refs[i]
 	}
+	c.uniqueVars = map[*types.Var]bool{}
+	for _, u := range schema.Uniques {
+		for _, f := range u.Fields {
+			c.uniqueVars[f] = true
+		}
+	}
 	f, err := parser.ParseBytes(src, 0)
 	if err != nil {
 		c.errs = append(c.errs, fmt.Errorf("%s: malformed YAML:\n%w", c.path, err))
@@ -145,6 +158,7 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 	for _, item := range seq.Values {
 		c.recordRefs = nil
 		c.recordKeys = map[*types.Var]string{}
+		c.recordUniques = map[*types.Var][]RefValue{}
 		fields, ok := c.structFields(schema.Struct, item, 1, true)
 		if !ok {
 			continue
@@ -153,9 +167,33 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 		for _, k := range schema.Keys {
 			r.Keys = append(r.Keys, c.recordKeys[k])
 		}
+		for _, u := range schema.Uniques {
+			r.Uniques = append(r.Uniques, uniqueValues(u, c.recordUniques, r.Pos))
+		}
 		records = append(records, r)
 	}
 	return records
+}
+
+// uniqueValues returns the values of u in one record: every element of a unique slice, or the
+// combined value of the fields. A field absent from the record gives no value.
+func uniqueValues(u Unique, values map[*types.Var][]RefValue, recordPos string) []RefValue {
+	if u.Elements {
+		return values[u.Fields[0]]
+	}
+	var lits []string
+	pos := recordPos
+	for _, f := range u.Fields {
+		vs, ok := values[f]
+		if !ok || len(vs) != 1 {
+			return nil
+		}
+		lits = append(lits, vs[0].Lit)
+		if len(u.Fields) == 1 {
+			pos = vs[0].Pos
+		}
+	}
+	return []RefValue{{Lit: strings.Join(lits, ", "), Pos: pos}}
 }
 
 func countDocs(f *ast.File) int {
@@ -589,7 +627,7 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 		}
 		var captured []RefValue
 		outer := c.capture
-		if ref := c.refs[f.v]; ref != nil {
+		if ref := c.refs[f.v]; ref != nil || (keyLevel && c.uniqueVars[f.v]) {
 			c.capture = &captured
 		}
 		v, ok := c.value(f.v.Type(), e.value, false, depth+1)
@@ -601,9 +639,14 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 		if isKey {
 			c.recordKeys[f.v] = v
 		}
-		for _, rv := range captured {
-			rv.Ref = c.refs[f.v]
-			c.recordRefs = append(c.recordRefs, rv)
+		if keyLevel && c.uniqueVars[f.v] {
+			c.recordUniques[f.v] = captured
+		}
+		if ref := c.refs[f.v]; ref != nil {
+			for _, rv := range captured {
+				rv.Ref = ref
+				c.recordRefs = append(c.recordRefs, rv)
+			}
 		}
 		fields = append(fields, fieldExpr{name: f.v.Name(), expr: v})
 	}

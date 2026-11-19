@@ -462,6 +462,7 @@ Generation fails for:
 - invalid types
 - malformed YAML
 - duplicate logical keys
+- duplicate values of fields tagged `datlas:"unique"` or `datlas:"unique=<group>"`
 - references to missing keys
 - values outside of an enum
 - empty values of fields tagged `datlas:"nonzero"`
