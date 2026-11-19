@@ -144,6 +144,12 @@ func TestTextKeyErrors(t *testing.T) {
 			want: `grants.yaml:1:39: Items refers to "0e0f", which does not exist in dataset "items"`,
 		},
 		{
+			// Logical keys are always nonzero, so a key text that decodes to the zero value is rejected (#11).
+			name:  "key decoding to the zero value",
+			files: map[string]string{"items.yaml": "- {id: '0000', name: a}\n"},
+			want:  `items.yaml:1:8: field "id" must not be empty or zero`,
+		},
+		{
 			name:  "invalid key text is reported once, as invalid",
 			files: map[string]string{"items.yaml": "- {id: 0a0, name: a}\n- {id: 0a0b, name: b}\n"},
 			want:  `invalid data.ID "0a0": must be 4 hex digits`,
@@ -191,6 +197,12 @@ func (o *Other) UnmarshalText(b []byte) error { copy(o[:], b); return nil }
 			name:   "key of a non-comparable text type",
 			schema: "//datlas:master items\ntype Item struct {\n\tTags Tags `master:\"key\"`\n}\n",
 			want:   "a logical key of a type implementing encoding.TextUnmarshaler must be comparable, not example.com/datlastest.Tags",
+		},
+		{
+			// Comparable text types can be keys, but unique still compares literals, so they are rejected there.
+			name:   "unique on a comparable text type",
+			schema: "//datlas:master items\ntype Item struct {\n\tCode string `master:\"key\"`\n\tID ID `datlas:\"unique\"`\n}\n",
+			want:   "unique is not supported for data.ID: values of types implementing encoding.TextUnmarshaler can only be compared after decoding",
 		},
 		{
 			name:   "reference of another text type",

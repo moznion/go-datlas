@@ -65,6 +65,9 @@ func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader
 				errs = append(errs, err)
 			}
 		}
+		if err := checkUniques(ds); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, nil, err
@@ -143,6 +146,36 @@ func checkDuplicateKeys(ds *Dataset) error {
 			continue
 		}
 		seen[key] = r.Pos
+	}
+	return errors.Join(errs...)
+}
+
+// checkUniques fails when two values of a uniqueness constraint are equal within the dataset
+// (for seed data, within one environment).
+func checkUniques(ds *Dataset) error {
+	var errs []error
+	for i, u := range ds.Schema.Uniques {
+		var names []string
+		for _, f := range u.Fields {
+			names = append(names, f.Name())
+		}
+		what := "unique field " + names[0]
+		switch {
+		case u.Elements:
+			what = "element of unique field " + names[0]
+		case u.Group != "":
+			what = fmt.Sprintf("unique group %q (%s)", u.Group, strings.Join(names, ", "))
+		}
+		seen := map[string]string{}
+		for _, r := range ds.Records {
+			for _, v := range r.Uniques[i] {
+				if prev, dup := seen[v.Lit]; dup {
+					errs = append(errs, fmt.Errorf("%s: duplicate %s = %s (first defined at %s)", v.Pos, what, v.Lit, prev))
+					continue
+				}
+				seen[v.Lit] = v.Pos
+			}
+		}
 	}
 	return errors.Join(errs...)
 }

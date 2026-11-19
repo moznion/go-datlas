@@ -84,6 +84,17 @@ type Schema struct {
 	Keys []*types.Var
 	// Refs are the fields referring to the logical key of another dataset.
 	Refs []Ref
+	// Uniques are the uniqueness constraints besides the logical key (`datlas:"unique"`).
+	Uniques []Unique
+}
+
+// Unique is a uniqueness constraint: no two values of Fields (taken together) are equal within a dataset.
+type Unique struct {
+	// Group is the name given with `unique=<group>`, or empty for a field tagged `unique`.
+	Group  string
+	Fields []*types.Var
+	// Elements is true for a slice field tagged `unique`: its elements are distinct across the dataset.
+	Elements bool
 }
 
 // Ref is a field whose values must be logical keys of another dataset.
@@ -347,6 +358,7 @@ func schemaOf(kind Kind, d loader.Directive, enums *loader.Enums) (Schema, error
 		errs      []error
 		keyTagged bool
 		seen      = map[*types.Struct]bool{}
+		groups    = map[string]int{} // unique group name -> index in schema.Uniques
 	)
 	var walk func(st *types.Struct, path string, keyLevel bool)
 	walk = func(st *types.Struct, path string, keyLevel bool) {
@@ -396,6 +408,11 @@ func schemaOf(kind Kind, d loader.Directive, enums *loader.Enums) (Schema, error
 					}
 				}
 			}
+			if isMapped && (f.constraints.unique || f.constraints.uniqueGroup != "") {
+				if err := addUnique(&schema, groups, f, keyLevel, d.Type.Name(), enums); err != nil {
+					errs = append(errs, fmt.Errorf("%s: %w", ctx, err))
+				}
+			}
 			if !isMapped {
 				continue
 			}
@@ -413,6 +430,46 @@ func schemaOf(kind Kind, d loader.Directive, enums *loader.Enums) (Schema, error
 		errs = append(errs, fmt.Errorf("%s: master data %s must declare a logical key with a `master:\"key\"` tag", d.Pos, d.Type.Name()))
 	}
 	return schema, errors.Join(errs...)
+}
+
+// addUnique adds the uniqueness constraint of f to schema. groups indexes the named groups in schema.Uniques.
+//
+// Values are compared by their Go literals, which the compiler normalizes, so only string, integer and
+// bool types (including enums) are supported, and slices of them for `unique`. Values of types decoded
+// with encoding.TextUnmarshaler could only be compared after decoding, which happens in a separate program.
+func addUnique(schema *Schema, groups map[string]int, f structField, keyLevel bool, schemaName string, enums *loader.Enums) error {
+	if !keyLevel || f.tag.inline {
+		return fmt.Errorf("unique must be on a field of %s or of a struct inlined into it", schemaName)
+	}
+	t := types.Unalias(f.v.Type())
+	elements := false
+	if s, ok := t.Underlying().(*types.Slice); ok && !isBytes(t) && f.constraints.unique {
+		t, elements = types.Unalias(s.Elem()), true
+	}
+	// scalarKind accepts comparable text types (for logical keys, whose duplicates are found by
+	// decoding them), but unique values are compared by their literals, so text types are rejected first.
+	if isText(t, enums) {
+		return fmt.Errorf("unique is not supported for %s: values of types implementing encoding.TextUnmarshaler can only be compared after decoding", typeName(t))
+	}
+	if scalarKind(t, enums) == "" {
+		supported := "a string, integer or bool type"
+		if f.constraints.unique {
+			supported += " (or a slice of one)"
+		}
+		return fmt.Errorf("unique requires %s, not %s", supported, typeName(f.v.Type()))
+	}
+	if f.constraints.unique {
+		schema.Uniques = append(schema.Uniques, Unique{Fields: []*types.Var{f.v}, Elements: elements})
+		return nil
+	}
+	i, ok := groups[f.constraints.uniqueGroup]
+	if !ok {
+		i = len(schema.Uniques)
+		groups[f.constraints.uniqueGroup] = i
+		schema.Uniques = append(schema.Uniques, Unique{Group: f.constraints.uniqueGroup})
+	}
+	schema.Uniques[i].Fields = append(schema.Uniques[i].Fields, f.v)
+	return nil
 }
 
 // structsIn returns the struct types values of t are built from, looking through

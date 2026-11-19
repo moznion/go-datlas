@@ -37,6 +37,9 @@ type Record struct {
 	Refs []RefValue
 	// Pos is the position of the record in its YAML file.
 	Pos string
+	// Uniques are the values of the uniqueness constraints, indexed like Schema.Uniques.
+	// A constraint whose fields are absent from the record (pointers, omitempty) has no value.
+	Uniques [][]RefValue
 }
 
 // RefValue is one value of a reference field.
@@ -58,6 +61,11 @@ type textCheck struct {
 	typ  types.Type
 	text string
 	pos  string
+	// node is the YAML node of the text, used to find the checks of the elements of a field.
+	node ast.Node
+	// zeroErr is reported when the decoded value is the zero value of typ, for a field tagged
+	// nonzero (or a logical key) or an element of a field tagged elem=nonzero. Empty otherwise.
+	zeroErr string
 }
 
 // compiler compiles YAML nodes into Go expressions, driven by the Go type expected at each node.
@@ -87,6 +95,10 @@ type compiler struct {
 	recordKeys map[*types.Var]string
 	// recordKeyTexts collects the texts of the keys decoded with encoding.TextUnmarshaler.
 	recordKeyTexts map[*types.Var]string
+	// uniqueVars are the fields with a uniqueness constraint.
+	uniqueVars map[*types.Var]bool
+	// recordUniques collects the values of the unique fields of the record being compiled.
+	recordUniques map[*types.Var][]RefValue
 }
 
 // anchorDef is a YAML anchor. An anchor name may be defined again; an alias refers to
@@ -135,6 +147,12 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 	for i := range schema.Refs {
 		c.refs[schema.Refs[i].Field] = &schema.Refs[i]
 	}
+	c.uniqueVars = map[*types.Var]bool{}
+	for _, u := range schema.Uniques {
+		for _, f := range u.Fields {
+			c.uniqueVars[f] = true
+		}
+	}
 	f, err := parser.ParseBytes(src, 0)
 	if err != nil {
 		c.errs = append(c.errs, fmt.Errorf("%s: malformed YAML:\n%w", c.path, err))
@@ -158,6 +176,7 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 		c.recordRefs = nil
 		c.recordKeys = map[*types.Var]string{}
 		c.recordKeyTexts = map[*types.Var]string{}
+		c.recordUniques = map[*types.Var][]RefValue{}
 		fields, ok := c.structFields(schema.Struct, item, 1, true)
 		if !ok {
 			continue
@@ -167,9 +186,33 @@ func (c *compiler) compileFile(src []byte, schema Schema) []Record {
 			r.Keys = append(r.Keys, c.recordKeys[k])
 			r.KeyTexts = append(r.KeyTexts, c.recordKeyTexts[k])
 		}
+		for _, u := range schema.Uniques {
+			r.Uniques = append(r.Uniques, uniqueValues(u, c.recordUniques, r.Pos))
+		}
 		records = append(records, r)
 	}
 	return records
+}
+
+// uniqueValues returns the values of u in one record: every element of a unique slice, or the
+// combined value of the fields. A field absent from the record gives no value.
+func uniqueValues(u Unique, values map[*types.Var][]RefValue, recordPos string) []RefValue {
+	if u.Elements {
+		return values[u.Fields[0]]
+	}
+	var lits []string
+	pos := recordPos
+	for _, f := range u.Fields {
+		vs, ok := values[f]
+		if !ok || len(vs) != 1 {
+			return nil
+		}
+		lits = append(lits, vs[0].Lit)
+		if len(u.Fields) == 1 {
+			pos = vs[0].Pos
+		}
+	}
+	return []RefValue{{Lit: strings.Join(lits, ", "), Pos: pos}}
 }
 
 func countDocs(f *ast.File) int {
@@ -601,9 +644,13 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 			valid = false
 			continue
 		}
+		if f.constraints.elemNonzero && !c.nonzeroElems(f.v.Type(), e.value, f.yamlName) {
+			valid = false
+			continue
+		}
 		var captured []RefValue
 		outer := c.capture
-		if ref := c.refs[f.v]; ref != nil {
+		if ref := c.refs[f.v]; ref != nil || (keyLevel && c.uniqueVars[f.v]) {
 			c.capture = &captured
 		}
 		texts := len(c.texts)
@@ -613,15 +660,28 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 			valid = false
 			continue
 		}
+		// isZero cannot tell whether a text denotes the zero value (e.g. the nil UUID);
+		// runTextChecks decodes it and checks.
+		if nonzero && isText(f.v.Type(), c.enums) && len(c.texts) > texts {
+			c.texts[texts].zeroErr = fmt.Sprintf("field %q must not be empty or zero", f.yamlName)
+		}
+		if f.constraints.elemNonzero {
+			c.markZeroElems(f.v.Type(), e.value, f.yamlName, c.texts[texts:])
+		}
 		if isKey {
 			c.recordKeys[f.v] = v
 			if isText(f.v.Type(), c.enums) && len(c.texts) > texts {
 				c.recordKeyTexts[f.v] = c.texts[texts].text
 			}
 		}
-		for _, rv := range captured {
-			rv.Ref = c.refs[f.v]
-			c.recordRefs = append(c.recordRefs, rv)
+		if keyLevel && c.uniqueVars[f.v] {
+			c.recordUniques[f.v] = captured
+		}
+		if ref := c.refs[f.v]; ref != nil {
+			for _, rv := range captured {
+				rv.Ref = ref
+				c.recordRefs = append(c.recordRefs, rv)
+			}
 		}
 		fields = append(fields, fieldExpr{name: f.v.Name(), expr: v})
 	}
@@ -680,12 +740,97 @@ func (c *compiler) textValue(t types.Type, n ast.Node, forceString bool) (string
 		c.errorf(n, "expected a scalar for %s, got %s", typeName(t), describe(n))
 		return "", false
 	}
-	c.texts = append(c.texts, textCheck{typ: t, text: s, pos: c.pos(n)})
+	c.texts = append(c.texts, textCheck{typ: t, text: s, pos: c.pos(n), node: n})
 	c.usesText = true
 	if c.capture != nil {
 		*c.capture = append(*c.capture, RefValue{Lit: strconv.Quote(s), Pos: c.pos(n), Type: t, Text: s})
 	}
 	return fmt.Sprintf("%s[%s](%s)", c.textFunc, c.im.TypeString(t), strconv.Quote(s)), true
+}
+
+// nonzeroElems reports, for the elem=nonzero constraint, every element of the sequence n
+// (or value of the mapping n) that is empty or zero, and whether there was none.
+// Values of the wrong shape are left to value, which reports them.
+func (c *compiler) nonzeroElems(t types.Type, n ast.Node, field string) bool {
+	n, _ = c.resolve(n, 0)
+	if n == nil {
+		return false
+	}
+	ok := true
+	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Slice, *types.Array:
+		seq, isSeq := n.(*ast.SequenceNode)
+		if !isSeq {
+			return true
+		}
+		elem := u.(interface{ Elem() types.Type }).Elem()
+		for i, v := range seq.Values {
+			if c.isZero(elem, v) {
+				c.errorf(v, "element %d of field %q must not be empty or zero", i, field)
+				ok = false
+			}
+		}
+	case *types.Map:
+		switch n.(type) {
+		case *ast.MappingNode, *ast.MappingValueNode:
+		default:
+			return true
+		}
+		entries, valid := c.mapping(n, 0)
+		if !valid {
+			return false
+		}
+		for _, e := range entries {
+			if c.isZero(u.Elem(), e.value) {
+				c.errorf(e.value, "value of key %q in field %q must not be empty or zero", e.key, field)
+				ok = false
+			}
+		}
+	}
+	return ok
+}
+
+// markZeroElems sets, for the elem=nonzero constraint on a field of type t whose elements (values)
+// are decoded with encoding.TextUnmarshaler, the error that runTextChecks reports when an element
+// decodes to the zero value: isZero cannot tell (e.g. the nil UUID). checks are those compiled for
+// the field's value n, in order.
+func (c *compiler) markZeroElems(t types.Type, n ast.Node, field string, checks []textCheck) {
+	var elem types.Type
+	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Slice:
+		elem = u.Elem()
+	case *types.Array:
+		elem = u.Elem()
+	case *types.Map:
+		elem = u.Elem()
+	}
+	if elem == nil || !isText(elem, c.enums) {
+		return
+	}
+	// An alias may resolve several elements to the same node, so errors are queued per node.
+	errs := map[ast.Node][]string{}
+	add := func(v ast.Node, msg string) {
+		if r, _ := c.resolve(v, 0); r != nil {
+			errs[r] = append(errs[r], msg)
+		}
+	}
+	n, _ = c.resolve(n, 0)
+	switch v := n.(type) {
+	case *ast.SequenceNode:
+		for i, e := range v.Values {
+			add(e, fmt.Sprintf("element %d of field %q must not be empty or zero", i, field))
+		}
+	case *ast.MappingNode, *ast.MappingValueNode:
+		entries, _ := c.mapping(n, 0)
+		for _, e := range entries {
+			add(e.value, fmt.Sprintf("value of key %q in field %q must not be empty or zero", e.key, field))
+		}
+	}
+	for i := range checks {
+		if q := errs[checks[i].node]; len(q) > 0 && checks[i].zeroErr == "" {
+			checks[i].zeroErr, errs[checks[i].node] = q[0], q[1:]
+		}
+	}
 }
 
 // isZero reports whether n denotes the zero value of t (or an empty slice or map).
