@@ -48,6 +48,9 @@ type textCheck struct {
 	typ  types.Type
 	text string
 	pos  string
+	// nonzeroField is the YAML name of the field when it is tagged nonzero (or is a logical key):
+	// the decoded value must then not be the zero value of typ. Empty otherwise.
+	nonzeroField string
 }
 
 // compiler compiles YAML nodes into Go expressions, driven by the Go type expected at each node.
@@ -592,11 +595,17 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 		if ref := c.refs[f.v]; ref != nil {
 			c.capture = &captured
 		}
+		texts := len(c.texts)
 		v, ok := c.value(f.v.Type(), e.value, false, depth+1)
 		c.capture = outer
 		if !ok {
 			valid = false
 			continue
+		}
+		// isZero cannot tell whether a text denotes the zero value (e.g. the nil UUID);
+		// runTextChecks decodes it and checks.
+		if nonzero && isText(f.v.Type(), c.enums) && len(c.texts) > texts {
+			c.texts[texts].nonzeroField = f.yamlName
 		}
 		if isKey {
 			c.recordKeys[f.v] = v

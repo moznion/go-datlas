@@ -257,6 +257,83 @@ func TestTextUnmarshaler(t *testing.T) {
 	mustFail(t, err, `prices.yaml:1:33: invalid data.Money "100": missing decimal point`)
 }
 
+// idSchema has text types whose zero value can be written: ID (an array, like a UUID) and Money (a struct).
+const idSchema = `package data
+
+import (
+	"encoding/hex"
+	"errors"
+	"strings"
+)
+
+// ID is a two-byte identifier written in hex; "0000" decodes to the zero value.
+type ID [2]byte
+
+func (id *ID) UnmarshalText(b []byte) error {
+	if len(b) != 4 {
+		return errors.New("must be 4 hex digits")
+	}
+	_, err := hex.Decode(id[:], b)
+	return err
+}
+
+// Money is a decimal amount decoded from text; no text decodes to the zero value.
+type Money struct{ text string }
+
+func (m *Money) UnmarshalText(b []byte) error {
+	if !strings.Contains(string(b), ".") {
+		return errors.New("missing decimal point")
+	}
+	m.text = string(b)
+	return nil
+}
+
+//datlas:seed items
+type Item struct {
+	Name   string ` + "`yaml:\"name\" seed:\"key\"`" + `
+	ID     ID     ` + "`yaml:\"id\" datlas:\"nonzero\"`" + `
+	Amount Money  ` + "`yaml:\"amount\" datlas:\"nonzero\"`" + `
+	Owner  ID     ` + "`yaml:\"owner\"`" + `
+}
+`
+
+// nonzero on a type decoded with encoding.TextUnmarshaler rejects values that decode to the zero value.
+func TestNonzeroTextUnmarshaler(t *testing.T) {
+	path, err := generate(t, SeedData, map[string]string{
+		"schema.go":       idSchema,
+		"demo/items.yaml": "- {name: a, id: 0a0b, amount: 0.00, owner: '0000'}\n",
+		"use.go":          "package data\n\nvar _ = DemoItems\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.TypeCheck(t, filepath.Dir(path), ".")
+	if matches, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".datlas-check-*")); len(matches) > 0 {
+		t.Fatalf("temporary files were left behind: %v", matches)
+	}
+
+	for data, want := range map[string]string{
+		// The text is not empty, but decodes to the zero value.
+		"- {name: a, id: '0000', amount: 1.00, owner: 0a0b}\n": `demo/items.yaml:1:17: field "id" must not be empty or zero`,
+		// A value that fails to decode is reported as invalid, not as zero.
+		"- {name: a, id: '000', amount: 1.00, owner: 0a0b}\n": `invalid data.ID "000": must be 4 hex digits`,
+		// Empty and missing values are rejected without decoding, like other types.
+		"- {name: a, id: null, amount: 1.00, owner: 0a0b}\n": `field "id" must not be empty or zero`,
+		"- {name: a, amount: 1.00, owner: 0a0b}\n":           `missing required field "id"`,
+	} {
+		_, err := generate(t, SeedData, map[string]string{"schema.go": idSchema, "demo/items.yaml": data})
+		mustFail(t, err, want)
+	}
+
+	// Every zero value is reported, not only the first one.
+	_, err = generate(t, SeedData, map[string]string{
+		"schema.go":       idSchema,
+		"demo/items.yaml": "- {name: a, id: '0000', amount: 1.00, owner: 0a0b}\n- {name: b, id: '0000', amount: 1.00, owner: 0a0b}\n",
+	})
+	mustFail(t, err, `demo/items.yaml:1:17: field "id" must not be empty or zero`)
+	mustFail(t, err, `demo/items.yaml:2:17: field "id" must not be empty or zero`)
+}
+
 func TestReferences(t *testing.T) {
 	schema := `package data
 
