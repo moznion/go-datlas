@@ -349,6 +349,12 @@ func (c *compiler) value(t types.Type, n ast.Node, elide bool, depth int) (strin
 		return "", false
 	}
 	t = types.Unalias(t)
+	// A type implementing json.Marshaler decides itself how its values, NaN included, are encoded.
+	if c.jsonColumn != "" && (hasJSONMarshaler(t) || hasJSONMarshaler(types.NewPointer(t))) {
+		outer := c.jsonColumn
+		c.jsonColumn = ""
+		defer func() { c.jsonColumn = outer }()
+	}
 	_, isNull := n.(*ast.NullNode)
 
 	switch {

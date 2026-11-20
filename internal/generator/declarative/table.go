@@ -215,7 +215,8 @@ func (jc *jsonChecker) check(t types.Type) error {
 	case *types.Struct:
 		for i := range u.NumFields() {
 			f := u.Field(i)
-			if !f.Exported() || reflect.StructTag(u.Tag(i)).Get("json") == "-" {
+			// encoding/json encodes the exported fields of embedded structs, even unexported ones.
+			if !f.Exported() && !f.Embedded() || reflect.StructTag(u.Tag(i)).Get("json") == "-" {
 				continue
 			}
 			if err := jc.check(f.Type()); err != nil {

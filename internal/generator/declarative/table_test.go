@@ -172,6 +172,11 @@ func TestTableErrors(t *testing.T) {
 		{name: "upper-case YAML key", files: master("//datlas:master roles table=r", "\tName string `yaml:\"displayName\"`\n"), want: `column name: "displayName" has upper-case letters`},
 		{name: "upper-case db tag", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"Name\"`\n"), want: `column name: "Name" has upper-case letters`},
 		{name: "bool map key in JSON", files: master("//datlas:master roles table=r", "\tM map[string]map[bool]int `yaml:\"m\"`\n"), want: "the column is written as JSON, but encoding/json cannot encode maps with keys of type bool"},
+		{name: "bool map key in unexported embedded struct", files: func() map[string]string {
+			f := master("//datlas:master roles table=r", "\tO Outer `yaml:\"o\"`\n")
+			f["schema.go"] += "\ntype inner struct {\n\tM map[bool]int `yaml:\"m\"`\n}\n\ntype Outer struct {\n\tinner `yaml:\"inner\"`\n\tX int `yaml:\"x\"`\n}\n"
+			return f
+		}(), want: "encoding/json cannot encode maps with keys of type bool"},
 		{name: "NaN in JSON", files: map[string]string{
 			"schema.go":  "package data\n\n//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n\tF float64 `yaml:\"f\"`\n\tM map[string]float64 `yaml:\"m\"`\n}\n",
 			"roles.yaml": "- {code: a, f: .nan, m: {x: .inf}}\n",
@@ -195,10 +200,11 @@ func TestTableErrors(t *testing.T) {
 func TestJSONAllowedValues(t *testing.T) {
 	schema := "package data\n\nimport \"encoding/json\"\n\ntype B bool\n\nfunc (b B) MarshalText() ([]byte, error) { return []byte(\"b\"), nil }\n\n" +
 		"type Raw map[bool]int\n\nfunc (r Raw) MarshalJSON() ([]byte, error) { return json.Marshal(len(r)) }\n\n" +
+		"type Ratio struct {\n\tV float64 `yaml:\"v\"`\n}\n\nfunc (r Ratio) MarshalJSON() ([]byte, error) { return []byte(\"null\"), nil }\n\n" +
 		"//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n" +
-		"\tF float64 `yaml:\"f\"`\n\tT map[B]int `yaml:\"t\"`\n\tR Raw `yaml:\"r\"`\n\tX map[bool]int `yaml:\"x\" db:\"-\"`\n}\n"
-	// NaN outside JSON columns, bool keys of a TextMarshaler, json.Marshaler types and excluded fields are fine.
-	_, err := generate(t, MasterData, map[string]string{"schema.go": schema, "roles.yaml": "- {code: a, f: .nan, t: {true: 1}, r: {true: 1}, x: {true: 1}}\n"})
+		"\tF float64 `yaml:\"f\"`\n\tQ []Ratio `yaml:\"q\"`\n\tT map[B]int `yaml:\"t\"`\n\tR Raw `yaml:\"r\"`\n\tX map[bool]int `yaml:\"x\" db:\"-\"`\n}\n"
+	// NaN outside JSON columns or in json.Marshaler types, bool keys of a TextMarshaler, json.Marshaler types and excluded fields are fine.
+	_, err := generate(t, MasterData, map[string]string{"schema.go": schema, "roles.yaml": "- {code: a, f: .nan, q: [{v: .nan}], t: {true: 1}, r: {true: 1}, x: {true: 1}}\n"})
 	if err != nil {
 		t.Fatal(err)
 	}
