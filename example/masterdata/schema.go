@@ -17,19 +17,19 @@ const (
 	TierBusiness Tier = "business"
 )
 
-//datlas:master roles
+//datlas:master roles table=roles
 type RoleDefinition struct {
 	Code string `yaml:"code" master:"key"`
 	Name string `yaml:"name" datlas:"nonzero"`
 }
 
-//datlas:master permissions
+//datlas:master permissions table=permissions
 type PermissionDefinition struct {
 	Role   string `yaml:"role" master:"key,ref=roles"`
 	Action string `yaml:"action" master:"key"`
 }
 
-//datlas:master plans
+//datlas:master plans table=plans
 type PlanDefinition struct {
 	Code        string        `yaml:"code" master:"key"`
 	Name        string        `yaml:"name" datlas:"nonzero,unique"`
@@ -49,7 +49,7 @@ type PlanLimits struct {
 
 // RegionDefinition is keyed by a type implementing encoding.TextUnmarshaler.
 //
-//datlas:master regions
+//datlas:master regions table=regions
 type RegionDefinition struct {
 	ID      model.UUID `yaml:"id" master:"key"`
 	Code    string     `yaml:"code" datlas:"nonzero,unique"`

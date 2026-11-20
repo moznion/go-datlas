@@ -3,8 +3,8 @@
 // Usage:
 //
 //	datlas fixture [-out DIR] [-pkg NAME] [-config FILE] [-check] [PACKAGES...]
-//	datlas master  [-dir DIR] [-check] [PACKAGE]
-//	datlas seed    [-dir DIR] [-check] [PACKAGE]
+//	datlas master  [-dir DIR] [-dialect NAME] [-check] [PACKAGE]
+//	datlas seed    [-dir DIR] [-dialect NAME] [-check] [PACKAGE]
 //	datlas version
 //
 // It is typically run through go:generate.
@@ -17,10 +17,12 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 
 	"github.com/moznion/go-datlas/internal/generator/declarative"
 	"github.com/moznion/go-datlas/internal/generator/fixture"
 	"github.com/moznion/go-datlas/internal/generator/output"
+	"github.com/moznion/go-datlas/internal/generator/sqldialect"
 )
 
 const usage = `datlas generates typed Go code for fixtures, master data and seed data.
@@ -28,8 +30,8 @@ const usage = `datlas generates typed Go code for fixtures, master data and seed
 Usage:
 
 	datlas fixture [-out DIR] [-pkg NAME] [-config FILE] [-check] [PACKAGES...]
-	datlas master  [-dir DIR] [-check] [PACKAGE]
-	datlas seed    [-dir DIR] [-check] [PACKAGE]
+	datlas master  [-dir DIR] [-dialect NAME] [-check] [PACKAGE]
+	datlas seed    [-dir DIR] [-dialect NAME] [-check] [PACKAGE]
 	datlas version
 
 Run "datlas <command> -h" for the details of a command.
@@ -46,18 +48,22 @@ Without PACKAGES and -config, only the factory itself is generated,
 so that factory methods can be added to it by hand.
 
 `,
-	"master": `Usage: datlas master [-dir DIR] [-check] [PACKAGE]
+	"master": `Usage: datlas master [-dir DIR] [-dialect NAME] [-check] [PACKAGE]
 
 Compile the master data YAML files in DIR (<name>.yaml) into
 zz_masterdata_gen.go of PACKAGE, using its //datlas:master schemas.
 PACKAGE defaults to the package in the current directory.
+Datasets with table=<name> also get ApplyMasterData, writing them
+to a database with the SQL of -dialect.
 
 `,
-	"seed": `Usage: datlas seed [-dir DIR] [-check] [PACKAGE]
+	"seed": `Usage: datlas seed [-dir DIR] [-dialect NAME] [-check] [PACKAGE]
 
 Compile the seed data YAML files in DIR (<env>/<name>.yaml) into
 zz_seeddata_gen.go of PACKAGE, using its //datlas:seed schemas.
 PACKAGE defaults to the package in the current directory.
+Datasets with table=<name> also get ApplySeedData, writing them
+to a database with the SQL of -dialect.
 
 `,
 }
@@ -118,6 +124,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	case "master", "seed":
 		dir := fs.String("dir", ".", "directory holding the YAML files, relative to the package directory")
+		dialect := fs.String("dialect", sqldialect.Default, "SQL dialect of the statements applying datasets with a table ("+strings.Join(sqldialect.Names(), ", ")+")")
 		if err := fs.Parse(args); err != nil {
 			return err
 		}
@@ -129,7 +136,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if cmd == "seed" {
 			kind = declarative.SeedData
 		}
-		result, err = declarative.Generate(kind, declarative.Config{Dir: wd, Package: fs.Arg(0), DataDir: *dir})
+		result, err = declarative.Generate(kind, declarative.Config{Dir: wd, Package: fs.Arg(0), DataDir: *dir, Dialect: *dialect})
 	}
 	if err != nil {
 		return err

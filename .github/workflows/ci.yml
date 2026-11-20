@@ -26,6 +26,17 @@ jobs:
 
   example:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: datlas
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      DATLAS_TEST_POSTGRES_DSN: postgres://postgres:datlas@localhost:5432/postgres?sslmode=disable
     defaults:
       run:
         working-directory: example
@@ -39,5 +50,6 @@ jobs:
           (cd fixture && go tool datlas fixture -config fixture.yaml -check ../model)
           (cd masterdata && go tool datlas master -check)
           (cd seeddata && go tool datlas seed -check)
+          (cd dbapply/edgecases && go tool datlas master -dir master -check && go tool datlas seed -dir seed -check)
       - run: go vet ./...
       - run: go test -race ./...

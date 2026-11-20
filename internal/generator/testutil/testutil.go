@@ -4,6 +4,7 @@ package testutil
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -94,4 +95,14 @@ func ReadFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// GoTest runs `go test` on the packages matched by patterns in dir and fails the test when they fail.
+func GoTest(t *testing.T, dir string, patterns ...string) {
+	t.Helper()
+	cmd := exec.Command("go", append([]string{"test", "-count=1"}, patterns...)...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test failed: %v\n%s", err, out)
+	}
 }
