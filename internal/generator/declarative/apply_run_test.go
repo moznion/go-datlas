@@ -19,6 +19,10 @@ import (
 // FailText and FailJSON make encoding fail, to test the errors of the generated code.
 var FailText, FailJSON bool
 
+// ErrBoom is the error of Boom.MarshalJSON, matched with errors.Is since the message
+// encoding/json wraps it in differs between Go versions.
+var ErrBoom = errors.New("boom")
+
 type Code string
 
 func (c *Code) UnmarshalText(b []byte) error { *c = Code(strings.ToLower(string(b))); return nil }
@@ -52,7 +56,7 @@ type Boom struct {
 
 func (b Boom) MarshalJSON() ([]byte, error) {
 	if FailJSON {
-		return nil, errors.New("boom")
+		return nil, ErrBoom
 	}
 	return []byte("\"ok\""), nil
 }
@@ -174,11 +178,13 @@ func TestErrors(t *testing.T) {
 		failJSON  bool
 		want      string
 		wantExec  bool
+		// wantBoom makes want a prefix of the error, which must wrap data.ErrBoom.
+		wantBoom  bool
 	}{
 		{name: "exec upsert", failOn: "INSERT", want: upsert + "exec failed", wantExec: true},
 		{name: "exec prune", failOn: "DELETE", want: "datlas: prune items: master data \"items\" from items.yaml: exec failed", wantExec: true},
 		{name: "MarshalText", failText: true, want: upsert + "encode ID: bad code"},
-		{name: "json.Marshal", failJSON: true, want: upsert + "encode Boom: json: error calling MarshalJSON for type *data.Boom: boom"},
+		{name: "json.Marshal", failJSON: true, want: upsert + "encode Boom: json: error calling MarshalJSON for type ", wantBoom: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -186,11 +192,14 @@ func TestErrors(t *testing.T) {
 			defer func() { data.FailText, data.FailJSON = false, false }()
 			r := recorder{failOn: tt.failOn}
 			err := data.ApplyMasterData(context.Background(), &r)
-			if err == nil || err.Error() != tt.want {
+			if err == nil || (!tt.wantBoom && err.Error() != tt.want) || (tt.wantBoom && !strings.HasPrefix(err.Error(), tt.want)) {
 				t.Fatalf("err = %v\nwant  %s", err, tt.want)
 			}
 			if errors.Is(err, errExec) != tt.wantExec {
 				t.Errorf("errors.Is(err, errExec) = %v", !tt.wantExec)
+			}
+			if errors.Is(err, data.ErrBoom) != tt.wantBoom {
+				t.Errorf("errors.Is(err, data.ErrBoom) = %v", !tt.wantBoom)
 			}
 		})
 	}
