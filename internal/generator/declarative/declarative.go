@@ -19,6 +19,7 @@ import (
 	"github.com/moznion/go-datlas/internal/generator/loader"
 	"github.com/moznion/go-datlas/internal/generator/naming"
 	"github.com/moznion/go-datlas/internal/generator/output"
+	"github.com/moznion/go-datlas/internal/generator/sqldialect"
 )
 
 // Kind distinguishes Master Data from Seed Data.
@@ -129,6 +130,8 @@ type Dataset struct {
 	Singular string
 	// NoConsts disables the constants of the logical keys of Master Data (consts=false).
 	NoConsts bool
+	// Table maps the dataset to a database table (table=<name>), or is nil.
+	Table *Table
 	// Files are the YAML files the records were compiled from.
 	// Seed Data environments without a file for the dataset have none and no records.
 	Files   []string
@@ -148,6 +151,9 @@ type Config struct {
 	Package string
 	// DataDir is the directory holding the YAML files, relative to the package directory.
 	DataDir string
+	// Dialect is the SQL dialect of the statements applying datasets with a table
+	// (see sqldialect.Names); empty means sqldialect.Default.
+	Dialect string
 }
 
 // Generate compiles every dataset of kind declared in cfg.Package.
@@ -155,6 +161,14 @@ type Config struct {
 // the previously generated file; it is an error if there is none.
 func Generate(kind Kind, cfg Config) (output.Result, error) {
 	fail := func(err error) (output.Result, error) { return output.Result{}, err }
+	dialectName := cfg.Dialect
+	if dialectName == "" {
+		dialectName = sqldialect.Default
+	}
+	dialect, err := sqldialect.Lookup(dialectName)
+	if err != nil {
+		return fail(err)
+	}
 	pattern := cfg.Package
 	if pattern == "" {
 		pattern = "."
@@ -217,7 +231,7 @@ func Generate(kind Kind, cfg Config) (output.Result, error) {
 	if err != nil {
 		return fail(err)
 	}
-	src, texts, err := render(kind, pkg, datasets, enums, nm)
+	src, texts, err := render(kind, pkg, datasets, enums, nm, dialect)
 	if err != nil {
 		return fail(err)
 	}
@@ -234,6 +248,7 @@ type namedSchema struct {
 	name      string
 	singular  string
 	noConsts  bool
+	table     *Table
 	directive loader.Directive
 	schema    Schema
 }
@@ -253,6 +268,8 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 		var (
 			singular string
 			noConsts bool
+			table    string
+			prune    = kind == MasterData
 			seenOpt  = map[string]bool{}
 		)
 		for _, opt := range d.Args[1:] {
@@ -267,10 +284,20 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 				noConsts = true
 				seenOpt[k] = true
 				continue
+			case k == "table" && v != "":
+				table = v
+				seenOpt[k] = true
+				continue
+			case k == "prune" && (kind == MasterData && v == "false" || kind == SeedData && v == "true"):
+				prune = !prune
+				seenOpt[k] = true
+				continue
 			}
-			available := "singular=<Name>"
+			available := "singular=<Name>, table=<name>"
 			if kind == MasterData {
-				available += ", consts=false"
+				available += ", consts=false, prune=false"
+			} else {
+				available += ", prune=true"
 			}
 			errs = append(errs, fmt.Errorf("%s: //datlas:%s: unknown or repeated option %q (available: %s)", d.Pos, kind.directive(), opt, available))
 		}
@@ -298,7 +325,29 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 			errs = append(errs, err)
 			continue
 		}
-		result = append(result, namedSchema{name: name, singular: singular, noConsts: noConsts, directive: d, schema: schema})
+		var tbl *Table
+		switch {
+		case table != "":
+			if tbl, err = tableOf(kind, d, schema, table, prune, enums); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		case seenOpt["prune"]:
+			errs = append(errs, fmt.Errorf("%s: //datlas:%s: prune has no effect without table=<name>", d.Pos, kind.directive()))
+			continue
+		}
+		result = append(result, namedSchema{name: name, singular: singular, noConsts: noConsts, table: tbl, directive: d, schema: schema})
+	}
+	tables := map[string]namedSchema{}
+	for _, s := range result {
+		if s.table == nil {
+			continue
+		}
+		if prev, dup := tables[s.table.Name]; dup {
+			errs = append(errs, fmt.Errorf("%s: table %s is also the table of dataset %q", s.directive.Pos, s.table.Name, prev.name))
+			continue
+		}
+		tables[s.table.Name] = s
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
@@ -656,7 +705,7 @@ func discover(kind Kind, dataDir string, schemas []namedSchema) ([]*Dataset, err
 		}
 		byDataset := map[string]*Dataset{}
 		for _, s := range schemas {
-			ds := &Dataset{Kind: kind, Name: s.name, Env: loc.env, Schema: s.schema, Singular: s.singular, NoConsts: s.noConsts}
+			ds := &Dataset{Kind: kind, Name: s.name, Env: loc.env, Schema: s.schema, Singular: s.singular, NoConsts: s.noConsts, Table: s.table}
 			byDataset[s.name] = ds
 			datasets = append(datasets, ds)
 		}
@@ -820,6 +869,8 @@ const (
 	seedEnvironmentsName = "SeedEnvironments"
 	seedSetName          = "SeedSet"
 	seedForName          = "SeedFor"
+	applyMasterName      = "ApplyMasterData"
+	applySeedName        = "ApplySeedData"
 )
 
 // namer records the generated identifiers and detects collisions between them, with
@@ -870,6 +921,13 @@ func assignNames(kind Kind, pkg *packages.Package, pkgDir string, datasets []*Da
 		}
 	} else {
 		claim(masterDatasetsName, "master data")
+	}
+	if hasTables(datasets) {
+		name := applyMasterName
+		if kind == SeedData {
+			name = applySeedName
+		}
+		claim(name, kind.String())
 	}
 	for _, ds := range datasets {
 		ds.FuncName = naming.Camel(ds.Env) + naming.Camel(ds.Name)

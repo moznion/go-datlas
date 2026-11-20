@@ -18,16 +18,16 @@ The generator should provide a common implementation while preserving this separ
 
 The generator is **not** responsible for:
 
-- SQL generation
 - ORM integration
-- Migration generation
-- Database synchronization
-- INSERT/UPDATE/DELETE generation
+- Migration generation (DDL)
 - Transaction management
+- SQL for fixtures
 
-The generator only produces typed Go code.
-
-Applying generated data into a database is the application's responsibility.
+The generator produces typed Go code. For Master Data and Seed Data mapped to a table
+(`table=<name>`), that code includes the statements writing the data to a database
+(see [Applying Data](#applying-data)): those statements follow from the schema almost uniquely,
+so making every application write them would halve the value of the generator.
+The database connection and the transaction stay the application's.
 
 ---
 
@@ -234,10 +234,9 @@ The generator owns:
 
 The application owns:
 
-- mapping definitions into DB models
-- SQL execution
-- synchronization policy
+- the database schema (DDL) and the connection
 - transaction management
+- mapping definitions into DB models, when they are not mapped to a table
 
 ---
 
@@ -378,20 +377,27 @@ The generator is unaware of the lower half.
 
 # Applying Data
 
-The generator never inserts data into a database.
-
-Instead the application provides:
+Datasets mapped to a table (`//datlas:master roles table=roles`) are applied by generated functions
+that take the database from the application:
 
 ```
-ApplyMasterData(ctx)
+ApplyMasterData(ctx, db)
 
-ApplySeedData(ctx, "local")
-
-ApplySeedData(ctx, "demo")
+ApplySeedData(ctx, db, "local")
 ```
 
-Internally those functions consume generated Go values.
-`SeedFor(env)` gives `ApplySeedData` the seed data of an environment by name.
+`db` is anything with `ExecContext` (`*sql.DB`, `*sql.Tx`, `*sql.Conn`), so the application decides
+on transactions. The statements are generated for one SQL dialect (`-dialect`, PostgreSQL first);
+dialects implement one interface in the generator, so others can be added without changing the rest.
+
+- Records are upserted by their logical key; records without one are inserted.
+- Master Data is the specification, so rows whose keys are not in it are deleted (prune), unless
+  `prune=false`. Seed data tables also hold rows the application creates, so seed data prunes only
+  with `prune=true`.
+- Columns are named by `db` tags or YAML keys. Values that are not scalars are stored as JSON.
+
+Datasets without a table are not written; the application consumes their generated Go values.
+`SeedFor(env)` gives the seed data of an environment by name.
 
 References between datasets are known at generation time, so the generator also emits the
 order in which datasets can be applied: `MasterDatasets()` and `SeedDatasets()` list the dataset
@@ -716,9 +722,7 @@ Possible future features:
 Explicitly out of scope:
 
 - ORM integration
-- SQL generation
 - migration generation
-- automatic DB synchronization
 - association graph generation (fields can only be linked to values the test supplies; see `from` and `ref` in the README)
 - callback system similar to FactoryBot
 

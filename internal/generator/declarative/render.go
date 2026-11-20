@@ -18,6 +18,7 @@ import (
 	"github.com/moznion/go-datlas/internal/generator/loader"
 	"github.com/moznion/go-datlas/internal/generator/naming"
 	"github.com/moznion/go-datlas/internal/generator/output"
+	"github.com/moznion/go-datlas/internal/generator/sqldialect"
 )
 
 // keysMarker precedes the dataset name in the doc comment of the key lookup function of
@@ -28,8 +29,8 @@ const keysMarker = "//datlas:keys "
 
 // render compiles the YAML of every dataset and renders the generated file.
 // Records are compiled here because literals depend on the imports of the file.
-func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader.Enums, nm *namer) ([]byte, []textCheck, error) {
-	im := output.NewImports(pkg.PkgPath, append(pkg.Types.Scope().Names(), "key", "env")...)
+func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader.Enums, nm *namer, dialect sqldialect.Dialect) ([]byte, []textCheck, error) {
+	im := output.NewImports(pkg.PkgPath, append(pkg.Types.Scope().Names(), "key", "env", "ctx", "db", "i", "args", "err", "keys", "step", "steps")...)
 
 	var (
 		b        bytes.Buffer
@@ -94,6 +95,9 @@ func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader
 	if kind == SeedData {
 		renderDatasetOrder(&b, seedDatasetsName, "seed data", order)
 		renderSeedSet(&b, im, datasets, order)
+	}
+	if err := renderApply(&b, im, kind, datasets, order, dialect); err != nil {
+		return nil, nil, err
 	}
 	if usesPtr {
 		fmt.Fprintf(&b, "\nfunc %sPtr[T any](v T) *T { return &v }\n", kind.prefix())

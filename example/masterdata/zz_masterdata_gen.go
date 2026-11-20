@@ -3,6 +3,10 @@
 package masterdata
 
 import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -224,6 +228,191 @@ func datlasMasterRegions2() RegionDefinition {
 		Country: "US",
 		Name:    "Virginia",
 	}
+}
+
+// datlasMasterRowRoles returns the values of the columns of table roles for a record.
+func datlasMasterRowRoles(datlasRec RoleDefinition) ([]any, error) {
+	return []any{datlasRec.Code, datlasRec.Name}, nil
+}
+
+// datlasMasterUpsertRoles applies the records of Roles to table roles.
+func datlasMasterUpsertRoles(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Roles() {
+		args, err := datlasMasterRowRoles(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "roles" ("code", "name") VALUES ($1, $2) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into roles: master data "roles" from roles.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterPruneRoles deletes the rows of table roles whose keys are not in Roles.
+func datlasMasterPruneRoles(ctx context.Context, db datlasMasterDB) error {
+	var keys []any
+	for i, datlasRec := range Roles() {
+		args, err := datlasMasterRowRoles(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune roles: master data "roles" from roles.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "roles" WHERE "code" NOT IN ($1, $2)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune roles: master data "roles" from roles.yaml`, err)
+	}
+	return nil
+}
+
+// datlasMasterRowPermissions returns the values of the columns of table permissions for a record.
+func datlasMasterRowPermissions(datlasRec PermissionDefinition) ([]any, error) {
+	return []any{datlasRec.Role, datlasRec.Action}, nil
+}
+
+// datlasMasterUpsertPermissions applies the records of Permissions to table permissions.
+func datlasMasterUpsertPermissions(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Permissions() {
+		args, err := datlasMasterRowPermissions(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "permissions" ("role", "action") VALUES ($1, $2) ON CONFLICT ("role", "action") DO NOTHING`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into permissions: master data "permissions" from permissions.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterPrunePermissions deletes the rows of table permissions whose keys are not in Permissions.
+func datlasMasterPrunePermissions(ctx context.Context, db datlasMasterDB) error {
+	var keys []any
+	for i, datlasRec := range Permissions() {
+		args, err := datlasMasterRowPermissions(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune permissions: master data "permissions" from permissions.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0], args[1])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "permissions" WHERE ("role", "action") NOT IN (($1, $2), ($3, $4), ($5, $6))`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune permissions: master data "permissions" from permissions.yaml`, err)
+	}
+	return nil
+}
+
+// datlasMasterRowPlans returns the values of the columns of table plans for a record.
+func datlasMasterRowPlans(datlasRec PlanDefinition) ([]any, error) {
+	datlasCol5, err := json.Marshal(datlasRec.Features)
+	if err != nil {
+		return nil, fmt.Errorf("encode Features: %w", err)
+	}
+	datlasCol6, err := json.Marshal(datlasRec.Regions)
+	if err != nil {
+		return nil, fmt.Errorf("encode Regions: %w", err)
+	}
+	datlasCol8, err := json.Marshal(datlasRec.Limits)
+	if err != nil {
+		return nil, fmt.Errorf("encode Limits: %w", err)
+	}
+	return []any{datlasRec.Code, datlasRec.Name, datlasRec.Tier, datlasRec.PriceYen, datlasRec.Trial, string(datlasCol5), string(datlasCol6), datlasRec.Description, string(datlasCol8)}, nil
+}
+
+// datlasMasterUpsertPlans applies the records of Plans to table plans.
+func datlasMasterUpsertPlans(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Plans() {
+		args, err := datlasMasterRowPlans(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "plans" ("code", "name", "tier", "price_yen", "trial", "features", "regions", "description", "limits") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name", "tier" = EXCLUDED."tier", "price_yen" = EXCLUDED."price_yen", "trial" = EXCLUDED."trial", "features" = EXCLUDED."features", "regions" = EXCLUDED."regions", "description" = EXCLUDED."description", "limits" = EXCLUDED."limits"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into plans: master data "plans" from plans.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterPrunePlans deletes the rows of table plans whose keys are not in Plans.
+func datlasMasterPrunePlans(ctx context.Context, db datlasMasterDB) error {
+	var keys []any
+	for i, datlasRec := range Plans() {
+		args, err := datlasMasterRowPlans(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune plans: master data "plans" from plans.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "plans" WHERE "code" NOT IN ($1, $2)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune plans: master data "plans" from plans.yaml`, err)
+	}
+	return nil
+}
+
+// datlasMasterRowRegions returns the values of the columns of table regions for a record.
+func datlasMasterRowRegions(datlasRec RegionDefinition) ([]any, error) {
+	datlasCol0, err := datlasRec.ID.MarshalText()
+	if err != nil {
+		return nil, fmt.Errorf("encode ID: %w", err)
+	}
+	return []any{string(datlasCol0), datlasRec.Code, datlasRec.Country, datlasRec.Name}, nil
+}
+
+// datlasMasterUpsertRegions applies the records of Regions to table regions.
+func datlasMasterUpsertRegions(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Regions() {
+		args, err := datlasMasterRowRegions(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "regions" ("id", "code", "country", "name") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "code" = EXCLUDED."code", "country" = EXCLUDED."country", "name" = EXCLUDED."name"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into regions: master data "regions" from regions.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterPruneRegions deletes the rows of table regions whose keys are not in Regions.
+func datlasMasterPruneRegions(ctx context.Context, db datlasMasterDB) error {
+	var keys []any
+	for i, datlasRec := range Regions() {
+		args, err := datlasMasterRowRegions(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune regions: master data "regions" from regions.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "regions" WHERE "id" NOT IN ($1, $2, $3)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune regions: master data "regions" from regions.yaml`, err)
+	}
+	return nil
+}
+
+// datlasMasterDB is the database the master data is applied to.
+type datlasMasterDB = interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// ApplyMasterData applies the master data to the database db: it inserts the records of every dataset having
+// a table, updating the rows whose keys exist (upsert), in the order of MasterDatasets, then deletes the rows
+// whose keys are not in the master data (prune), in the reverse order.
+// db is typically a *sql.DB, *sql.Tx or *sql.Conn; pass a *sql.Tx to apply all or nothing.
+func ApplyMasterData(ctx context.Context, db interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}) error {
+	for _, step := range []func(context.Context, datlasMasterDB) error{
+		datlasMasterUpsertRegions,
+		datlasMasterUpsertPlans,
+		datlasMasterUpsertRoles,
+		datlasMasterUpsertPermissions,
+		datlasMasterPrunePermissions,
+		datlasMasterPruneRoles,
+		datlasMasterPrunePlans,
+		datlasMasterPruneRegions,
+	} {
+		if err := step(ctx, db); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func datlasMasterPtr[T any](v T) *T { return &v }

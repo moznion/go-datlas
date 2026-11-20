@@ -5,13 +5,13 @@ import "time"
 
 //go:generate go tool datlas seed
 
-//datlas:seed companies
+//datlas:seed companies table=companies prune=true
 type CompanySeed struct {
 	Key  string `yaml:"key" seed:"key"`
 	Name string `yaml:"name"`
 }
 
-//datlas:seed users
+//datlas:seed users table=users
 type UserSeed struct {
 	Email      string    `yaml:"email" seed:"key"`
 	CompanyKey string    `yaml:"company" seed:"ref=companies"`

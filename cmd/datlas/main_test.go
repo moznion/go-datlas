@@ -80,3 +80,21 @@ func TestFixtureSkeletonAndConfig(t *testing.T) {
 	}
 	testutil.TypeCheck(t, dir, "./...")
 }
+
+func TestDialectFlag(t *testing.T) {
+	dir := testutil.WriteTree(t, map[string]string{
+		"data/schema.go":  "package data\n\n//datlas:master roles table=roles\ntype Role struct {\n\tCode string `master:\"key\"`\n}\n",
+		"data/roles.yaml": "- code: a\n",
+	})
+	t.Chdir(filepath.Join(dir, "data"))
+	var out, errOut bytes.Buffer
+	if err := run([]string{"master", "-dialect", "oracle"}, &out, &errOut); err == nil || !strings.Contains(err.Error(), `unknown SQL dialect "oracle" (available: postgres)`) {
+		t.Fatalf("unknown dialect: %v", err)
+	}
+	if err := run([]string{"master", "-dialect", "postgres"}, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if src := testutil.ReadFile(t, "zz_masterdata_gen.go"); !strings.Contains(src, `ON CONFLICT ("code")`) {
+		t.Fatalf("no upsert generated:\n%s", src)
+	}
+}

@@ -28,3 +28,7 @@ func (u UUID) String() string {
 	s := hex.EncodeToString(u[:])
 	return s[0:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:]
 }
+
+// MarshalText returns the canonical form. Implementing encoding.TextMarshaler lets the generated
+// ApplyMasterData and ApplySeedData write UUID values to the database as text.
+func (u UUID) MarshalText() ([]byte, error) { return []byte(u.String()), nil }

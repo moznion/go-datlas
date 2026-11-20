@@ -13,6 +13,7 @@ It is a separate module that runs datlas from this repository as a Go tool
 | [fixture/](fixture) | Fixture | Factory for `model` and `dbgen` types, plus hand-written methods |
 | [masterdata/](masterdata) | Master Data | Roles, permissions and plans compiled from YAML |
 | [seeddata/](seeddata) | Seed Data | Companies and users per environment (`local`, `demo`) |
+| [dbapply/](dbapply) | Master and Seed Data | Applies both to PostgreSQL (tests) |
 
 Files named `zz_*_gen.go` are generated. Everything else is written by hand.
 
@@ -132,4 +133,23 @@ Each directory is an environment: `local/users.yaml` and `demo/users.yaml` share
 alice, ok := seeddata.LocalUserByEmail("alice@example.test")
 local, ok := seeddata.SeedFor("local") // every dataset of an environment
 envs := seeddata.SeedEnvironments()    // ["demo", "local"]
+```
+
+## Applying to a database
+
+Every dataset of [masterdata/](masterdata) and [seeddata/](seeddata) is mapped to a table
+(`//datlas:master roles table=roles`), so `ApplyMasterData` and `ApplySeedData` are generated.
+`companies` prunes its rows (`prune=true`); `users` keeps rows the application creates.
+[dbapply/dbapply_test.go](dbapply/dbapply_test.go) holds the DDL and applies both to PostgreSQL:
+
+```go
+tx, _ := db.BeginTx(ctx, nil)
+_ = masterdata.ApplyMasterData(ctx, tx)
+_ = seeddata.ApplySeedData(ctx, tx, "local")
+_ = tx.Commit()
+```
+
+```sh
+docker run -d -e POSTGRES_PASSWORD=datlas -p 5432:5432 postgres
+DATLAS_TEST_POSTGRES_DSN='postgres://postgres:datlas@localhost:5432/postgres?sslmode=disable' go test ./dbapply
 ```

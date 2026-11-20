@@ -1,0 +1,184 @@
+package declarative
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/moznion/go-datlas/internal/generator/testutil"
+)
+
+const tableSchema = `package data
+
+import (
+	"database/sql/driver"
+	"strings"
+	"time"
+)
+
+type Code string
+
+func (c *Code) UnmarshalText(b []byte) error { *c = Code(strings.ToLower(string(b))); return nil }
+func (c Code) MarshalText() ([]byte, error)  { return []byte(c), nil }
+
+type Money struct{ Yen int }
+
+func (m *Money) Value() (driver.Value, error) { return int64(m.Yen), nil }
+
+type Base struct {
+	CreatedAt time.Time ` + "`yaml:\"created_at\"`" + `
+}
+
+//datlas:master items table=app.items
+type Item struct {
+	Base     ` + "`yaml:\",inline\"`" + `
+	ID       Code              ` + "`yaml:\"id\" master:\"key\"`" + `
+	Alias    *Code             ` + "`yaml:\"alias\"`" + `
+	Name     string            ` + "`yaml:\"name\" db:\"title\"`" + `
+	Price    Money             ` + "`yaml:\"price\"`" + `
+	Tags     []string          ` + "`yaml:\"tags\"`" + `
+	Attrs    *map[string]int   ` + "`yaml:\"attrs\"`" + `
+	TTL      time.Duration     ` + "`yaml:\"ttl\"`" + `
+	Note     string            ` + "`yaml:\"note\" db:\"-\"`" + `
+}
+
+//datlas:master pairs table=pairs prune=false
+type Pair struct {
+	A string ` + "`yaml:\"a\" master:\"key\"`" + `
+	B string ` + "`yaml:\"b\" master:\"key\"`" + `
+}
+
+//datlas:master plain singular=PlainOne
+type PlainRow struct {
+	K string ` + "`yaml:\"k\" master:\"key\"`" + `
+}
+`
+
+func TestApplyMasterData(t *testing.T) {
+	dir := testutil.WriteTree(t, map[string]string{
+		"schema.go":  tableSchema,
+		"items.yaml": "- {id: A, alias: X, created_at: 2024-01-01, name: n, price: {yen: 1}, tags: [t], ttl: 1h, note: x}\n- {id: b, created_at: 2024-01-01, name: m, price: {yen: 2}, tags: [], attrs: {a: 1}, ttl: 0s, note: y}\n",
+		"pairs.yaml": "- {a: x, b: y}\n",
+		"plain.yaml": "- {k: z}\n",
+	})
+	path, err := run(MasterData, Config{Dir: dir, Package: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.TypeCheck(t, dir, ".")
+	src := testutil.ReadFile(t, path)
+	mustContain(t, src,
+		"func ApplyMasterData(ctx context.Context, db interface {",
+		"datlasMasterUpsertItems, datlasMasterUpsertPairs, datlasMasterPruneItems, }",
+		`INSERT INTO "app"."items" ("created_at", "id", "alias", "title", "price", "tags", "attrs", "ttl") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT ("id") DO UPDATE SET`,
+		`DELETE FROM "app"."items" WHERE "id" NOT IN ($1, $2)`,
+		`keys = append(keys, args[1])`,
+		`INSERT INTO "pairs" ("a", "b") VALUES ($1, $2) ON CONFLICT ("a", "b") DO NOTHING`,
+		"datlasCol1, err := datlasRec.ID.MarshalText()",
+		"if datlasRec.Alias != nil {",
+		"&datlasRec.Price",
+		"json.Marshal(datlasRec.Tags)",
+		"if datlasRec.Attrs != nil {",
+		"return []any{datlasRec.Base.CreatedAt, string(datlasCol1), datlasCol2, datlasRec.Name, &datlasRec.Price, string(datlasCol5), datlasCol6, datlasRec.TTL}, nil",
+	)
+	for _, absent := range []string{"datlasMasterPrunePairs", "datlasMasterUpsertPlain", `"note"`} {
+		if strings.Contains(src, absent) {
+			t.Errorf("generated code contains %s", absent)
+		}
+	}
+}
+
+func TestApplyMasterDataAbsentWithoutTables(t *testing.T) {
+	path, err := generate(t, MasterData, map[string]string{"schema.go": roleSchema, "roles.yaml": "[]\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src := testutil.ReadFile(t, path); strings.Contains(src, "ApplyMasterData") || strings.Contains(src, "database/sql") {
+		t.Fatalf("generated Apply without tables:\n%s", src)
+	}
+}
+
+func TestApplySeedData(t *testing.T) {
+	schema := "package data\n\n//datlas:seed companies table=companies prune=true\ntype Company struct {\n\tKey string `yaml:\"key\" seed:\"key\"`\n}\n\n" +
+		"//datlas:seed events table=events\ntype Event struct {\n\tCompany string `yaml:\"company\" seed:\"ref=companies\"`\n}\n"
+	dir := testutil.WriteTree(t, map[string]string{
+		"schema.go":            schema,
+		"local/companies.yaml": "- {key: a}\n- {key: b}\n",
+		"local/events.yaml":    "- {company: a}\n",
+		"demo/events.yaml":     "[]\n",
+	})
+	path, err := run(SeedData, Config{Dir: dir, Package: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testutil.TypeCheck(t, dir, ".")
+	mustContain(t, testutil.ReadFile(t, path),
+		"func ApplySeedData(ctx context.Context, db interface {",
+		// demo has no companies.yaml, so its companies table is not pruned.
+		`case "demo": steps = []func(context.Context, datlasSeedDB) error{ datlasSeedUpsertDemoCompanies, datlasSeedUpsertDemoEvents, }`,
+		`case "local": steps = []func(context.Context, datlasSeedDB) error{ datlasSeedUpsertLocalCompanies, datlasSeedUpsertLocalEvents, datlasSeedPruneLocalCompanies, }`,
+		`return fmt.Errorf("datlas: no seed data for environment %q", env)`,
+		"INSERT INTO \"events\" (\"company\") VALUES ($1)`",
+		`DELETE FROM "companies" WHERE "key" NOT IN ($1, $2)`,
+	)
+}
+
+func TestTableErrors(t *testing.T) {
+	master := func(directive, fields string) map[string]string {
+		return map[string]string{
+			"schema.go":  "package data\n\nimport \"strings\"\n\nvar _ = strings.ToLower\n\n" + directive + "\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n" + fields + "}\n",
+			"roles.yaml": "[]\n",
+		}
+	}
+	text := "type T struct{ s string }\n\nfunc (t *T) UnmarshalText(b []byte) error { t.s = string(b); return nil }\n"
+	tests := []struct {
+		name  string
+		kind  Kind
+		files map[string]string
+		cfg   Config
+		want  string
+	}{
+		{name: "invalid table", files: master("//datlas:master roles table=a-b", ""), want: `invalid table name "a-b"`},
+		{name: "empty table", files: master("//datlas:master roles table=", ""), want: `unknown or repeated option "table="`},
+		{name: "prune=true on master", files: master("//datlas:master roles table=r prune=true", ""), want: `unknown or repeated option "prune=true"`},
+		{name: "prune without table", files: master("//datlas:master roles prune=false", ""), want: "prune has no effect without table=<name>"},
+		{name: "duplicate column", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"code\"`\n"), want: `column "code" is also used by Code`},
+		{name: "invalid column", files: master("//datlas:master roles table=r", "\tName string `yaml:\"the-name\"`\n"), want: `invalid column name "the-name"`},
+		{name: "db tag options", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,omitempty\"`\n"), want: `unknown db tag options "omitempty"`},
+		{name: "excluded key", files: map[string]string{
+			"schema.go":  "package data\n\n//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\" db:\"-\"`\n\tName string `yaml:\"name\"`\n}\n",
+			"roles.yaml": "[]\n",
+		}, want: "a logical key field cannot be excluded from the table"},
+		{name: "text without marshaler", files: func() map[string]string {
+			f := master("//datlas:master roles table=r", "\tT T `yaml:\"t\"`\n")
+			f["schema.go"] += "\n" + text
+			return f
+		}(), want: "implements encoding.TextUnmarshaler but neither driver.Valuer nor encoding.TextMarshaler"},
+		{name: "duplicate table", files: map[string]string{
+			"schema.go": "package data\n\n//datlas:master a table=t\ntype A struct {\n\tK string `master:\"key\"`\n}\n\n//datlas:master b table=t\ntype B struct {\n\tK string `master:\"key\"`\n}\n",
+			"a.yaml":    "[]\n",
+			"b.yaml":    "[]\n",
+		}, want: `table t is also the table of dataset "a"`},
+		{name: "apply name conflict", files: func() map[string]string {
+			f := master("//datlas:master roles table=r", "")
+			f["schema.go"] += "\nfunc ApplyMasterData() {}\n"
+			return f
+		}(), want: "generated identifier ApplyMasterData conflicts with the declaration"},
+		{name: "seed apply name conflict", kind: SeedData, files: map[string]string{
+			"schema.go":         "package data\n\n//datlas:seed events table=events\ntype E struct {\n\tA string\n}\n\nfunc ApplySeedData() {}\n",
+			"local/events.yaml": "[]\n",
+		}, want: "generated identifier ApplySeedData conflicts with the declaration"},
+		{name: "unknown dialect", files: master("//datlas:master roles table=r", ""), cfg: Config{Dialect: "oracle"}, want: `unknown SQL dialect "oracle"`},
+		{name: "prune keyless seed", kind: SeedData, files: map[string]string{
+			"schema.go":         "package data\n\n//datlas:seed events table=events prune=true\ntype E struct {\n\tA string\n}\n",
+			"local/events.yaml": "[]\n",
+		}, want: "prune=true requires a logical key"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			cfg.Dir, cfg.Package = testutil.WriteTree(t, tt.files), "."
+			_, err := run(tt.kind, cfg)
+			mustFail(t, err, tt.want)
+		})
+	}
+}

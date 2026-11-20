@@ -3,6 +3,9 @@
 package seeddata
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -160,4 +163,140 @@ func SeedFor(env string) (SeedSet, bool) {
 		}, true
 	}
 	return SeedSet{}, false
+}
+
+// datlasSeedRowCompanies returns the values of the columns of table companies for a record.
+func datlasSeedRowCompanies(datlasRec CompanySeed) ([]any, error) {
+	return []any{datlasRec.Key, datlasRec.Name}, nil
+}
+
+// datlasSeedUpsertDemoCompanies applies the records of DemoCompanies to table companies.
+func datlasSeedUpsertDemoCompanies(ctx context.Context, db datlasSeedDB) error {
+	for i, datlasRec := range DemoCompanies() {
+		args, err := datlasSeedRowCompanies(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "companies" ("key", "name") VALUES ($1, $2) ON CONFLICT ("key") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into companies: seed data "companies" (environment "demo") from demo/companies.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasSeedPruneDemoCompanies deletes the rows of table companies whose keys are not in DemoCompanies.
+func datlasSeedPruneDemoCompanies(ctx context.Context, db datlasSeedDB) error {
+	var keys []any
+	for i, datlasRec := range DemoCompanies() {
+		args, err := datlasSeedRowCompanies(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune companies: seed data "companies" (environment "demo") from demo/companies.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "companies" WHERE "key" NOT IN ($1)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune companies: seed data "companies" (environment "demo") from demo/companies.yaml`, err)
+	}
+	return nil
+}
+
+// datlasSeedUpsertLocalCompanies applies the records of LocalCompanies to table companies.
+func datlasSeedUpsertLocalCompanies(ctx context.Context, db datlasSeedDB) error {
+	for i, datlasRec := range LocalCompanies() {
+		args, err := datlasSeedRowCompanies(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "companies" ("key", "name") VALUES ($1, $2) ON CONFLICT ("key") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into companies: seed data "companies" (environment "local") from local/companies.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasSeedPruneLocalCompanies deletes the rows of table companies whose keys are not in LocalCompanies.
+func datlasSeedPruneLocalCompanies(ctx context.Context, db datlasSeedDB) error {
+	var keys []any
+	for i, datlasRec := range LocalCompanies() {
+		args, err := datlasSeedRowCompanies(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune companies: seed data "companies" (environment "local") from local/companies.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "companies" WHERE "key" NOT IN ($1)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune companies: seed data "companies" (environment "local") from local/companies.yaml`, err)
+	}
+	return nil
+}
+
+// datlasSeedRowUsers returns the values of the columns of table users for a record.
+func datlasSeedRowUsers(datlasRec UserSeed) ([]any, error) {
+	return []any{datlasRec.Email, datlasRec.CompanyKey, datlasRec.Role, datlasRec.JoinedAt}, nil
+}
+
+// datlasSeedUpsertDemoUsers applies the records of DemoUsers to table users.
+func datlasSeedUpsertDemoUsers(ctx context.Context, db datlasSeedDB) error {
+	for i, datlasRec := range DemoUsers() {
+		args, err := datlasSeedRowUsers(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "users" ("email", "company", "role", "joined_at") VALUES ($1, $2, $3, $4) ON CONFLICT ("email") DO UPDATE SET "company" = EXCLUDED."company", "role" = EXCLUDED."role", "joined_at" = EXCLUDED."joined_at"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into users: seed data "users" (environment "demo") from demo/users.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasSeedUpsertLocalUsers applies the records of LocalUsers to table users.
+func datlasSeedUpsertLocalUsers(ctx context.Context, db datlasSeedDB) error {
+	for i, datlasRec := range LocalUsers() {
+		args, err := datlasSeedRowUsers(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "users" ("email", "company", "role", "joined_at") VALUES ($1, $2, $3, $4) ON CONFLICT ("email") DO UPDATE SET "company" = EXCLUDED."company", "role" = EXCLUDED."role", "joined_at" = EXCLUDED."joined_at"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into users: seed data "users" (environment "local") from local/users.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasSeedDB is the database the seed data is applied to.
+type datlasSeedDB = interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// ApplySeedData applies the seed data of the environment env to the database db: it inserts the records
+// of every dataset having a table, updating the rows whose keys exist (upsert), in the order of SeedDatasets,
+// then deletes the rows whose keys are not in the seed data of the datasets with prune=true,
+// in the reverse order. Records of datasets without a logical key are always inserted.
+// db is typically a *sql.DB, *sql.Tx or *sql.Conn; pass a *sql.Tx to apply all or nothing.
+func ApplySeedData(ctx context.Context, db interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}, env string) error {
+	var steps []func(context.Context, datlasSeedDB) error
+	switch env {
+	case "demo":
+		steps = []func(context.Context, datlasSeedDB) error{
+			datlasSeedUpsertDemoCompanies,
+			datlasSeedUpsertDemoUsers,
+			datlasSeedPruneDemoCompanies,
+		}
+	case "local":
+		steps = []func(context.Context, datlasSeedDB) error{
+			datlasSeedUpsertLocalCompanies,
+			datlasSeedUpsertLocalUsers,
+			datlasSeedPruneLocalCompanies,
+		}
+	default:
+		return fmt.Errorf("datlas: no seed data for environment %q", env)
+	}
+	for _, step := range steps {
+		if err := step(ctx, db); err != nil {
+			return err
+		}
+	}
+	return nil
 }
