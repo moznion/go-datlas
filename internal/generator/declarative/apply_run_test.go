@@ -63,6 +63,7 @@ type Item struct {
 	Alias *Code           ` + "`yaml:\"alias\"`" + `
 	V     VCode           ` + "`yaml:\"v\"`" + `
 	Price Money           ` + "`yaml:\"price\"`" + `
+	PM    *Money          ` + "`yaml:\"pm\"`" + `
 	Meta  *Meta           ` + "`yaml:\"meta\"`" + `
 	Attrs *map[string]int ` + "`yaml:\"attrs\"`" + `
 	Note  *string         ` + "`yaml:\"note\"`" + `
@@ -140,12 +141,18 @@ func TestValues(t *testing.T) {
 	if _, ok := r.calls[0].args[3].(*data.Money); !ok {
 		t.Errorf("Money is passed as %T, not by address", r.calls[0].args[3])
 	}
+	if _, ok := r.calls[0].args[4].(*data.Money); !ok {
+		t.Errorf("*Money is passed as %T, not as is", r.calls[0].args[4])
+	}
+	if r.calls[1].args[4] != nil {
+		t.Errorf("nil *Money is passed as %#v, not as nil", r.calls[1].args[4])
+	}
 	if _, ok := r.calls[0].args[2].(data.VCode); !ok {
 		t.Errorf("VCode is passed as %T, not as is", r.calls[0].args[2])
 	}
 	want := [][]any{
-		{"a", "x", "v:q", int64(5), "{\"a\":1}", "{\"k\":2}", "n", "\"ok\""},
-		{"b", nil, "v:r", int64(7), nil, nil, nil, "\"ok\""},
+		{"a", "x", "v:q", int64(5), int64(9), "{\"a\":1}", "{\"k\":2}", "n", "\"ok\""},
+		{"b", nil, "v:r", int64(7), nil, nil, nil, nil, "\"ok\""},
 	}
 	for i, w := range want {
 		if got := driverValues(t, r.calls[i].args); !reflect.DeepEqual(got, w) {
@@ -206,7 +213,7 @@ func TestApplyRun(t *testing.T) {
 	dir := testutil.WriteTree(t, map[string]string{
 		"data/schema.go":           applyRunSchema,
 		"data/run_test.go":         applyRunTest,
-		"data/m/items.yaml":        "- {id: A, alias: X, v: q, price: {yen: 5}, meta: {a: 1}, attrs: {k: 2}, note: n, boom: {x: 1}}\n- {id: b, v: r, price: {yen: 7}, boom: {x: 2}}\n",
+		"data/m/items.yaml":        "- {id: A, alias: X, v: q, price: {yen: 5}, pm: {yen: 9}, meta: {a: 1}, attrs: {k: 2}, note: n, boom: {x: 1}}\n- {id: b, v: r, price: {yen: 7}, boom: {x: 2}}\n",
 		"data/s/local/events.yaml": "- {kind: k}\n",
 	})
 	if _, err := run(MasterData, Config{Dir: dir, Package: "./data", DataDir: "m"}); err != nil {

@@ -409,6 +409,11 @@ err = tx.Commit()
   by default (`prune=false` disables it); seed data prunes only with `prune=true`, since its tables
   usually hold rows the application creates too. A seed data environment without a file for the
   dataset leaves its table alone; an empty file (`[]`) deletes every row.
+- **Prune and foreign keys**: rows of other tables may refer to rows that prune deletes, e.g. users
+  referring to a role removed from the master data. With `ON DELETE RESTRICT` or `NO ACTION` (the default)
+  the statement fails, and with a transaction nothing is applied. With `ON DELETE CASCADE` the referring
+  rows, possibly data of your users, are **deleted silently**. Avoid `CASCADE` on foreign keys to pruned
+  tables, or disable prune.
 - Datasets are upserted in the [applying order](#applying-order) and pruned in the reverse order,
   so foreign keys between their tables hold. Datasets without `table=` are not written.
 - Fields of inline structs (`yaml:",inline"`) are columns of their own. Values are passed to
@@ -421,7 +426,11 @@ err = tx.Commit()
   | other `encoding.TextUnmarshaler` types (e.g. UUIDs) | the text of `MarshalText`, which they must implement |
   | structs, slices, maps | JSON (e.g. a `jsonb` column), encoded by `encoding/json`: `json` tags apply, not `yaml` tags |
 
-  Pointers to any of them write `NULL` when nil.
+  Pointers to any of them write `NULL` when nil. Values JSON cannot hold fail generation: maps with
+  `bool` keys, and NaN and infinities in JSON columns.
+- Table and column names are quoted in statements, which makes them case-sensitive in PostgreSQL, while
+  unquoted names in DDL are folded to lower case. Names with upper-case letters therefore fail
+  generation; give lower-case column names with `db` tags (`db:"user_id"` for a YAML key `userId`).
 - Errors name the table, the dataset and the record (`datlas: upsert into roles: master data "roles"
   from roles.yaml, record #2: ...`).
 - Only the data is written: the tables (DDL) and migrations are yours.

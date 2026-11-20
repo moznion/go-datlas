@@ -171,16 +171,20 @@ func (r *sqlRenderer) renderRow(ds *Dataset) {
 		field := "datlasRec." + c.Path
 		v := "datlasCol" + strconv.Itoa(i)
 		var encode string
-		switch c.Enc {
-		case encDirect:
+		switch {
+		case c.Enc == encDirect && c.Ptr && c.Valuer:
+			fmt.Fprintf(b, "var %s any\nif %s != nil {\n%s = %s\n}\n", v, field, v, field)
+			args = append(args, v)
+			continue
+		case c.Enc == encDirect:
 			args = append(args, field)
 			continue
-		case encDirectAddr:
+		case c.Enc == encDirectAddr:
 			args = append(args, "&"+field)
 			continue
-		case encText:
+		case c.Enc == encText:
 			encode = field + ".MarshalText()"
-		case encJSON:
+		case c.Enc == encJSON:
 			if r.jsonPkg == "" {
 				r.jsonPkg = r.im.Add("encoding/json", "json")
 			}

@@ -1,6 +1,7 @@
 package declarative
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -167,6 +168,14 @@ func TestTableErrors(t *testing.T) {
 			"schema.go":         "package data\n\n//datlas:seed events table=events\ntype E struct {\n\tA string\n}\n\nfunc ApplySeedData() {}\n",
 			"local/events.yaml": "[]\n",
 		}, want: "generated identifier ApplySeedData conflicts with the declaration"},
+		{name: "upper-case table", files: master("//datlas:master roles table=app.Roles", ""), want: `table name: "Roles" has upper-case letters, which PostgreSQL folds to lower case unless quoted; use "roles"`},
+		{name: "upper-case YAML key", files: master("//datlas:master roles table=r", "\tName string `yaml:\"displayName\"`\n"), want: `column name: "displayName" has upper-case letters`},
+		{name: "upper-case db tag", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"Name\"`\n"), want: `column name: "Name" has upper-case letters`},
+		{name: "bool map key in JSON", files: master("//datlas:master roles table=r", "\tM map[string]map[bool]int `yaml:\"m\"`\n"), want: "the column is written as JSON, but encoding/json cannot encode maps with keys of type bool"},
+		{name: "NaN in JSON", files: map[string]string{
+			"schema.go":  "package data\n\n//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n\tF float64 `yaml:\"f\"`\n\tM map[string]float64 `yaml:\"m\"`\n}\n",
+			"roles.yaml": "- {code: a, f: .nan, m: {x: .inf}}\n",
+		}, want: `roles.yaml:1:29: an infinity cannot be written to column "m", which holds JSON`},
 		{name: "unknown dialect", files: master("//datlas:master roles table=r", ""), cfg: Config{Dialect: "oracle"}, want: `unknown SQL dialect "oracle"`},
 		{name: "prune keyless seed", kind: SeedData, files: map[string]string{
 			"schema.go":         "package data\n\n//datlas:seed events table=events prune=true\ntype E struct {\n\tA string\n}\n",
@@ -181,4 +190,30 @@ func TestTableErrors(t *testing.T) {
 			mustFail(t, err, tt.want)
 		})
 	}
+}
+
+func TestJSONAllowedValues(t *testing.T) {
+	schema := "package data\n\nimport \"encoding/json\"\n\ntype B bool\n\nfunc (b B) MarshalText() ([]byte, error) { return []byte(\"b\"), nil }\n\n" +
+		"type Raw map[bool]int\n\nfunc (r Raw) MarshalJSON() ([]byte, error) { return json.Marshal(len(r)) }\n\n" +
+		"//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n" +
+		"\tF float64 `yaml:\"f\"`\n\tT map[B]int `yaml:\"t\"`\n\tR Raw `yaml:\"r\"`\n\tX map[bool]int `yaml:\"x\" db:\"-\"`\n}\n"
+	// NaN outside JSON columns, bool keys of a TextMarshaler, json.Marshaler types and excluded fields are fine.
+	_, err := generate(t, MasterData, map[string]string{"schema.go": schema, "roles.yaml": "- {code: a, f: .nan, t: {true: 1}, r: {true: 1}, x: {true: 1}}\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestImportNamesUnchanged checks that tables do not rename the imports of the other generated code.
+func TestImportNamesUnchanged(t *testing.T) {
+	path, err := generate(t, MasterData, map[string]string{
+		"keys/keys.go": "package keys\n\ntype K string\n",
+		"schema.go":    "package data\n\nimport \"example.com/datlastest/keys\"\n\n//datlas:master roles table=r\ntype R struct {\n\tCode keys.K `yaml:\"code\" master:\"key\"`\n}\n",
+		"roles.yaml":   "- {code: a}\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, testutil.ReadFile(t, path), `"example.com/datlastest/keys"`, `RoleCodeA keys.K = "a"`)
+	testutil.TypeCheck(t, filepath.Dir(path), ".")
 }

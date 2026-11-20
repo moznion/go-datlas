@@ -219,7 +219,7 @@ func Generate(kind Kind, cfg Config) (output.Result, error) {
 	}
 
 	enums := loader.NewEnums(cfg.Dir, pkgs, all)
-	schemas, err := analyze(kind, pkg, directives, enums)
+	schemas, err := analyze(kind, pkg, directives, enums, dialect)
 	if err != nil {
 		return fail(err)
 	}
@@ -253,7 +253,7 @@ type namedSchema struct {
 	schema    Schema
 }
 
-func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, enums *loader.Enums) ([]namedSchema, error) {
+func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, enums *loader.Enums, dialect sqldialect.Dialect) ([]namedSchema, error) {
 	var (
 		result []namedSchema
 		errs   []error
@@ -328,7 +328,7 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 		var tbl *Table
 		switch {
 		case table != "":
-			if tbl, err = tableOf(kind, d, schema, table, prune, enums); err != nil {
+			if tbl, err = tableOf(kind, d, schema, table, prune, enums, dialect); err != nil {
 				errs = append(errs, err)
 				continue
 			}

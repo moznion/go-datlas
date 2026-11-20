@@ -109,6 +109,10 @@ type compiler struct {
 	uniqueVars map[*types.Var]bool
 	// recordUniques collects the values of the unique fields of the record being compiled.
 	recordUniques map[*types.Var][]RefValue
+	// jsonColumns are the fields written to the database as JSON, by column name.
+	jsonColumns map[*types.Var]string
+	// jsonColumn is the column of the JSON field being compiled, or empty.
+	jsonColumn string
 }
 
 // anchorDef is a YAML anchor. An anchor name may be defined again; an alias refers to
@@ -670,8 +674,13 @@ func (c *compiler) consumeFields(st *types.Struct, mappingNode ast.Node, remaini
 			c.capture = &captured
 		}
 		texts := len(c.texts)
+		outerJSON := c.jsonColumn
+		if col, ok := c.jsonColumns[f.v]; ok && keyLevel {
+			c.jsonColumn = col
+		}
 		v, ok := c.value(f.v.Type(), e.value, false, depth+1)
 		c.capture = outer
+		c.jsonColumn = outerJSON
 		if !ok {
 			valid = false
 			continue
@@ -956,6 +965,14 @@ func (c *compiler) basicLiteral(t types.Type, b *types.Basic, n ast.Node, forceS
 			}
 			f = parsed
 		case *ast.InfinityNode, *ast.NanNode:
+			if c.jsonColumn != "" {
+				what := "NaN"
+				if _, ok := v.(*ast.InfinityNode); ok {
+					what = "an infinity"
+				}
+				c.errorf(n, "%s cannot be written to column %q, which holds JSON: JSON has no NaN or infinities", what, c.jsonColumn)
+				return "", false
+			}
 			m := c.im.Add("math", "math")
 			expr := m + ".NaN()"
 			if inf, ok := v.(*ast.InfinityNode); ok {

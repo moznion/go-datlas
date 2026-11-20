@@ -24,6 +24,9 @@ type Dialect interface {
 	DeleteExcept(table string, keys []string, rows int) string
 	// MaxParams is the largest number of parameters a statement can take.
 	MaxParams() int
+	// CheckIdentifier reports why name, a valid identifier (see ValidIdentifier) of a table,
+	// schema or column, is a mistake in this dialect, or returns nil.
+	CheckIdentifier(name string) error
 }
 
 var dialects = map[string]Dialect{
@@ -86,6 +89,16 @@ func (postgres) Name() string { return "postgres" }
 
 // MaxParams is the limit of the PostgreSQL wire protocol, which counts parameters in 16 bits.
 func (postgres) MaxParams() int { return 65535 }
+
+// CheckIdentifier rejects upper-case letters. Statements quote identifiers, which makes them
+// case-sensitive, while PostgreSQL folds the unquoted identifiers of DDL to lower case:
+// "Users" would not find a table created with CREATE TABLE Users.
+func (postgres) CheckIdentifier(name string) error {
+	if strings.ToLower(name) != name {
+		return fmt.Errorf("%q has upper-case letters, which PostgreSQL folds to lower case unless quoted; use %q", name, strings.ToLower(name))
+	}
+	return nil
+}
 
 func (postgres) quote(name string) string {
 	parts := strings.Split(name, ".")

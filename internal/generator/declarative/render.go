@@ -30,7 +30,7 @@ const keysMarker = "//datlas:keys "
 // render compiles the YAML of every dataset and renders the generated file.
 // Records are compiled here because literals depend on the imports of the file.
 func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader.Enums, nm *namer, dialect sqldialect.Dialect) ([]byte, []textCheck, error) {
-	im := output.NewImports(pkg.PkgPath, append(pkg.Types.Scope().Names(), "key", "env", "ctx", "db", "i", "args", "err", "keys", "step", "steps")...)
+	im := output.NewImports(pkg.PkgPath, append(pkg.Types.Scope().Names(), "key", "env")...)
 
 	var (
 		b        bytes.Buffer
@@ -51,6 +51,9 @@ func render(kind Kind, pkg *packages.Package, datasets []*Dataset, enums *loader
 				enums:    enums,
 				ptrFunc:  kind.prefix() + "Ptr",
 				textFunc: kind.prefix() + "Text",
+			}
+			if ds.Table != nil {
+				c.jsonColumns = ds.Table.jsonColumns()
 			}
 			ds.Records = append(ds.Records, c.compileFile(src, ds.Schema)...)
 			usesPtr = usesPtr || c.usesPtr
