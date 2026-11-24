@@ -465,6 +465,41 @@ err = tx.Commit()
   from roles.yaml, record #2: ...`).
 - Only the data is written: the tables (DDL) and migrations are yours.
 
+### Previewing the changes (dry run)
+
+`DiffMasterData` and `DiffSeedData` report what `ApplyMasterData` and `ApplySeedData` would do,
+without writing anything. They only read the database (`QueryContext`), so they also work with a read-only
+connection:
+
+```go
+func DiffMasterData(ctx context.Context, db interface{ QueryContext(...) (*sql.Rows, error) }) ([]MasterDataChange, error)
+func DiffSeedData(ctx context.Context, db interface{ QueryContext(...) (*sql.Rows, error) }, env string) ([]SeedDataChange, error)
+```
+
+```go
+changes, err := masterdata.DiffMasterData(ctx, db)
+if err != nil { ... }
+for _, c := range changes {
+	if c.Op != masterdata.MasterDataUnchanged {
+		fmt.Println(c) // e.g. "update roles (admin): roles.yaml #1: name", "delete roles (guest)"
+	}
+}
+```
+
+- Each change has an `Op` (`MasterDataInsert`, `MasterDataUpdate`, `MasterDataUnchanged`, `MasterDataDelete`;
+  `SeedData...` for seed data), the `Table`, the `Dataset`, its `Source` file and the number of the `Record`
+  in it, the logical `Key` as text, and, for updates, the `Columns` whose values change.
+- Changes come in the order of the application: one for every record, upserts first, then one for every row
+  prune deletes. Records without a logical key are always inserts.
+- A record updates its row when one of the columns the update writes holds another value. They are compared
+  with `IS DISTINCT FROM`, as `skip_unchanged=true` does, so they need an equality operator (`jsonb`, not
+  `json`). Insert-only columns and the touch column are not compared. Without `skip_unchanged=true`,
+  `Apply...` still rewrites the unchanged rows (and sets their touch column).
+- Diffing runs one query per record of a dataset with a key, and one per pruned dataset.
+- It cannot tell whether applying will fail, e.g. on a constraint or a foreign key to a pruned row. The rows
+  may also change before applying, unless both run in one transaction isolating them
+  (e.g. `sql.LevelRepeatableRead`).
+
 ## Enums
 
 ```go

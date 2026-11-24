@@ -54,7 +54,8 @@ Compile the master data YAML files in DIR (<name>.yaml) into
 zz_masterdata_gen.go of PACKAGE, using its //datlas:master schemas.
 PACKAGE defaults to the package in the current directory.
 Datasets with table=<name> also get ApplyMasterData, writing them
-to a database with the SQL of -dialect.
+to a database with the SQL of -dialect, and DiffMasterData, reporting
+what it would change without writing.
 
 `,
 	"seed": `Usage: datlas seed [-dir DIR] [-dialect NAME] [-check] [PACKAGE]
@@ -63,7 +64,8 @@ Compile the seed data YAML files in DIR (<env>/<name>.yaml) into
 zz_seeddata_gen.go of PACKAGE, using its //datlas:seed schemas.
 PACKAGE defaults to the package in the current directory.
 Datasets with table=<name> also get ApplySeedData, writing them
-to a database with the SQL of -dialect.
+to a database with the SQL of -dialect, and DiffSeedData, reporting
+what it would change without writing.
 
 `,
 }

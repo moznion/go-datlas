@@ -107,7 +107,7 @@ func TestApplyMasterDataAbsentWithoutTables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if src := testutil.ReadFile(t, path); strings.Contains(src, "ApplyMasterData") || strings.Contains(src, "database/sql") {
+	if src := testutil.ReadFile(t, path); strings.Contains(src, "ApplyMasterData") || strings.Contains(src, "DiffMasterData") || strings.Contains(src, "database/sql") {
 		t.Fatalf("generated Apply without tables:\n%s", src)
 	}
 }
@@ -205,6 +205,15 @@ func TestTableErrors(t *testing.T) {
 			"schema.go":         "package data\n\n//datlas:seed events table=events\ntype E struct {\n\tA string\n}\n\nfunc ApplySeedData() {}\n",
 			"local/events.yaml": "[]\n",
 		}, want: "generated identifier ApplySeedData conflicts with the declaration"},
+		{name: "diff name conflict", files: func() map[string]string {
+			f := master("//datlas:master roles table=r", "")
+			f["schema.go"] += "\ntype MasterDataChange struct{}\n"
+			return f
+		}(), want: "generated identifier MasterDataChange conflicts with the declaration"},
+		{name: "seed diff name conflict", kind: SeedData, files: map[string]string{
+			"schema.go":         "package data\n\n//datlas:seed events table=events\ntype E struct {\n\tA string\n}\n\nconst SeedDataUnchanged = 0\n",
+			"local/events.yaml": "[]\n",
+		}, want: "generated identifier SeedDataUnchanged conflicts with the declaration"},
 		{name: "upper-case table", files: master("//datlas:master roles table=app.Roles", ""), want: `table name: "Roles" has upper-case letters, which PostgreSQL folds to lower case unless quoted; use "roles"`},
 		{name: "upper-case YAML key", files: master("//datlas:master roles table=r", "\tName string `yaml:\"displayName\"`\n"), want: `column name: "displayName" has upper-case letters`},
 		{name: "upper-case db tag", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"Name\"`\n"), want: `column name: "Name" has upper-case letters`},

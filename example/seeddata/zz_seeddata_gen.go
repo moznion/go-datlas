@@ -5,7 +5,9 @@ package seeddata
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -200,6 +202,45 @@ func datlasSeedPruneDemoCompanies(ctx context.Context, db datlasSeedDB) error {
 	return nil
 }
 
+// datlasSeedDiffDemoCompanies reports what datlasSeedUpsertDemoCompanies does to the rows of table companies.
+func datlasSeedDiffDemoCompanies(ctx context.Context, db datlasSeedQueryDB) ([]SeedDataChange, error) {
+	var changes []SeedDataChange
+	for i, datlasRec := range DemoCompanies() {
+		args, err := datlasSeedRowCompanies(datlasRec)
+		change := SeedDataChange{Table: "companies", Dataset: "companies", Source: "demo/companies.yaml", Record: i + 1}
+		if err == nil {
+			change.Key = []string{datlasSeedKeyText(args[0])}
+			change.Op, change.Columns, err = datlasSeedCompare(ctx, db, `SELECT "name" IS DISTINCT FROM $2 FROM "companies" WHERE "key" = $1`, []string{"name"}, args[0], args[1])
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff companies: seed data "companies" (environment "demo") from demo/companies.yaml, record`, i+1, err)
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
+// datlasSeedDiffPruneDemoCompanies reports the rows of table companies that datlasSeedPruneDemoCompanies deletes.
+func datlasSeedDiffPruneDemoCompanies(ctx context.Context, db datlasSeedQueryDB) ([]SeedDataChange, error) {
+	var keys []any
+	for i, datlasRec := range DemoCompanies() {
+		args, err := datlasSeedRowCompanies(datlasRec)
+		if err != nil {
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff prune companies: seed data "companies" (environment "demo") from demo/companies.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	stale, err := datlasSeedStale(ctx, db, `SELECT CAST("key" AS text) FROM "companies" WHERE "key" NOT IN ($1) ORDER BY "key"`, 1, keys...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff prune companies: seed data "companies" (environment "demo") from demo/companies.yaml`, err)
+	}
+	var changes []SeedDataChange
+	for _, key := range stale {
+		changes = append(changes, SeedDataChange{Op: SeedDataDelete, Table: "companies", Dataset: "companies", Source: "demo/companies.yaml", Key: key})
+	}
+	return changes, nil
+}
+
 // datlasSeedUpsertLocalCompanies applies the records of LocalCompanies to table companies.
 func datlasSeedUpsertLocalCompanies(ctx context.Context, db datlasSeedDB) error {
 	for i, datlasRec := range LocalCompanies() {
@@ -230,6 +271,45 @@ func datlasSeedPruneLocalCompanies(ctx context.Context, db datlasSeedDB) error {
 	return nil
 }
 
+// datlasSeedDiffLocalCompanies reports what datlasSeedUpsertLocalCompanies does to the rows of table companies.
+func datlasSeedDiffLocalCompanies(ctx context.Context, db datlasSeedQueryDB) ([]SeedDataChange, error) {
+	var changes []SeedDataChange
+	for i, datlasRec := range LocalCompanies() {
+		args, err := datlasSeedRowCompanies(datlasRec)
+		change := SeedDataChange{Table: "companies", Dataset: "companies", Source: "local/companies.yaml", Record: i + 1}
+		if err == nil {
+			change.Key = []string{datlasSeedKeyText(args[0])}
+			change.Op, change.Columns, err = datlasSeedCompare(ctx, db, `SELECT "name" IS DISTINCT FROM $2 FROM "companies" WHERE "key" = $1`, []string{"name"}, args[0], args[1])
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff companies: seed data "companies" (environment "local") from local/companies.yaml, record`, i+1, err)
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
+// datlasSeedDiffPruneLocalCompanies reports the rows of table companies that datlasSeedPruneLocalCompanies deletes.
+func datlasSeedDiffPruneLocalCompanies(ctx context.Context, db datlasSeedQueryDB) ([]SeedDataChange, error) {
+	var keys []any
+	for i, datlasRec := range LocalCompanies() {
+		args, err := datlasSeedRowCompanies(datlasRec)
+		if err != nil {
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff prune companies: seed data "companies" (environment "local") from local/companies.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	stale, err := datlasSeedStale(ctx, db, `SELECT CAST("key" AS text) FROM "companies" WHERE "key" NOT IN ($1) ORDER BY "key"`, 1, keys...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff prune companies: seed data "companies" (environment "local") from local/companies.yaml`, err)
+	}
+	var changes []SeedDataChange
+	for _, key := range stale {
+		changes = append(changes, SeedDataChange{Op: SeedDataDelete, Table: "companies", Dataset: "companies", Source: "local/companies.yaml", Key: key})
+	}
+	return changes, nil
+}
+
 // datlasSeedRowUsers returns the values of the columns of table users for a record.
 func datlasSeedRowUsers(datlasRec UserSeed) ([]any, error) {
 	return []any{datlasRec.Email, datlasRec.CompanyKey, datlasRec.Role, datlasRec.JoinedAt}, nil
@@ -249,6 +329,24 @@ func datlasSeedUpsertDemoUsers(ctx context.Context, db datlasSeedDB) error {
 	return nil
 }
 
+// datlasSeedDiffDemoUsers reports what datlasSeedUpsertDemoUsers does to the rows of table users.
+func datlasSeedDiffDemoUsers(ctx context.Context, db datlasSeedQueryDB) ([]SeedDataChange, error) {
+	var changes []SeedDataChange
+	for i, datlasRec := range DemoUsers() {
+		args, err := datlasSeedRowUsers(datlasRec)
+		change := SeedDataChange{Table: "users", Dataset: "users", Source: "demo/users.yaml", Record: i + 1}
+		if err == nil {
+			change.Key = []string{datlasSeedKeyText(args[0])}
+			change.Op, change.Columns, err = datlasSeedCompare(ctx, db, `SELECT "company" IS DISTINCT FROM $2, "role" IS DISTINCT FROM $3, "joined_at" IS DISTINCT FROM $4 FROM "users" WHERE "email" = $1`, []string{"company", "role", "joined_at"}, args[0], args[1], args[2], args[3])
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff users: seed data "users" (environment "demo") from demo/users.yaml, record`, i+1, err)
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
 // datlasSeedUpsertLocalUsers applies the records of LocalUsers to table users.
 func datlasSeedUpsertLocalUsers(ctx context.Context, db datlasSeedDB) error {
 	for i, datlasRec := range LocalUsers() {
@@ -261,6 +359,24 @@ func datlasSeedUpsertLocalUsers(ctx context.Context, db datlasSeedDB) error {
 		}
 	}
 	return nil
+}
+
+// datlasSeedDiffLocalUsers reports what datlasSeedUpsertLocalUsers does to the rows of table users.
+func datlasSeedDiffLocalUsers(ctx context.Context, db datlasSeedQueryDB) ([]SeedDataChange, error) {
+	var changes []SeedDataChange
+	for i, datlasRec := range LocalUsers() {
+		args, err := datlasSeedRowUsers(datlasRec)
+		change := SeedDataChange{Table: "users", Dataset: "users", Source: "local/users.yaml", Record: i + 1}
+		if err == nil {
+			change.Key = []string{datlasSeedKeyText(args[0])}
+			change.Op, change.Columns, err = datlasSeedCompare(ctx, db, `SELECT "company" IS DISTINCT FROM $2, "role" IS DISTINCT FROM $3, "joined_at" IS DISTINCT FROM $4 FROM "users" WHERE "email" = $1`, []string{"company", "role", "joined_at"}, args[0], args[1], args[2], args[3])
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff users: seed data "users" (environment "local") from local/users.yaml, record`, i+1, err)
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
 }
 
 // datlasSeedDB is the database the seed data is applied to.
@@ -299,4 +415,184 @@ func ApplySeedData(ctx context.Context, db interface {
 		}
 	}
 	return nil
+}
+
+// SeedDataOp is what ApplySeedData does to a row.
+type SeedDataOp int
+
+const (
+	// SeedDataInsert inserts a row for a record.
+	SeedDataInsert SeedDataOp = iota + 1
+	// SeedDataUpdate updates the columns of the row having the keys of a record.
+	SeedDataUpdate
+	// SeedDataUnchanged finds the row having the keys of a record holding its values already.
+	SeedDataUnchanged
+	// SeedDataDelete deletes a row whose keys are not in the seed data (prune).
+	SeedDataDelete
+)
+
+func (op SeedDataOp) String() string {
+	switch op {
+	case SeedDataInsert:
+		return "insert"
+	case SeedDataUpdate:
+		return "update"
+	case SeedDataUnchanged:
+		return "unchanged"
+	case SeedDataDelete:
+		return "delete"
+	}
+	return fmt.Sprintf("SeedDataOp(%d)", int(op))
+}
+
+// SeedDataChange is what ApplySeedData does to a row, as reported by DiffSeedData.
+type SeedDataChange struct {
+	Op SeedDataOp
+	// Table is the table of the row, and Dataset the dataset applied to it.
+	Table, Dataset string
+	// Source is the YAML file of the dataset, relative to the data directory.
+	Source string
+	// Record is the number, from 1, of the record in Source; 0 for SeedDataDelete.
+	Record int
+	// Key is the logical key of the row as text, or nil for a record without a logical key.
+	Key []string
+	// Columns are the columns SeedDataUpdate changes.
+	Columns []string
+}
+
+// String describes the change, e.g. "update roles (admin): roles.yaml #1: name".
+func (c SeedDataChange) String() string {
+	s := c.Op.String() + " " + c.Table
+	if c.Key != nil {
+		s += " (" + strings.Join(c.Key, ", ") + ")"
+	}
+	if c.Record > 0 {
+		s += fmt.Sprintf(": %s #%d", c.Source, c.Record)
+	}
+	if len(c.Columns) > 0 {
+		s += ": " + strings.Join(c.Columns, ", ")
+	}
+	return s
+}
+
+// datlasSeedQueryDB is the database DiffSeedData reads.
+type datlasSeedQueryDB = interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// datlasSeedKeyText returns a value passed to the database as text, for the key of a change.
+func datlasSeedKeyText(v any) string {
+	dv, err := driver.DefaultParameterConverter.ConvertValue(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	switch dv := dv.(type) {
+	case nil:
+		return "NULL"
+	case []byte:
+		return string(dv)
+	}
+	return fmt.Sprint(dv)
+}
+
+// datlasSeedCompare runs query, which selects whether each of cols is distinct from the value of a record
+// in the row having its keys, and returns what applying the record does to the row.
+func datlasSeedCompare(ctx context.Context, db datlasSeedQueryDB, query string, cols []string, args ...any) (SeedDataOp, []string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return SeedDataInsert, nil, rows.Err()
+	}
+	var changed []string
+	if len(cols) > 0 {
+		distinct := make([]bool, len(cols))
+		dest := make([]any, len(cols))
+		for i := range distinct {
+			dest[i] = &distinct[i]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return 0, nil, err
+		}
+		for i, d := range distinct {
+			if d {
+				changed = append(changed, cols[i])
+			}
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return 0, nil, err
+	}
+	if len(changed) == 0 {
+		return SeedDataUnchanged, nil, nil
+	}
+	return SeedDataUpdate, changed, nil
+}
+
+// datlasSeedStale runs query, which selects the keys of n columns of the rows prune deletes, as text.
+func datlasSeedStale(ctx context.Context, db datlasSeedQueryDB, query string, n int, args ...any) ([][]string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys [][]string
+	for rows.Next() {
+		vals := make([]sql.NullString, n)
+		dest := make([]any, n)
+		for i := range vals {
+			dest[i] = &vals[i]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		key := make([]string, n)
+		for i, v := range vals {
+			key[i] = "NULL"
+			if v.Valid {
+				key[i] = v.String
+			}
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
+// DiffSeedData reports, without writing anything, what ApplySeedData does to the rows of the database db:
+// one change for every record, in the order ApplySeedData applies them, then one for every row prune deletes.
+// A row is SeedDataUnchanged when the columns the update writes hold the values of the record, compared as
+// skip_unchanged=true compares them; without skip_unchanged=true, ApplySeedData rewrites it all the same
+// (and sets its touch column). The rows may change between DiffSeedData and ApplySeedData unless both run in
+// one transaction isolating them, e.g. at sql.LevelRepeatableRead.
+func DiffSeedData(ctx context.Context, db interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}, env string) ([]SeedDataChange, error) {
+	var steps []func(context.Context, datlasSeedQueryDB) ([]SeedDataChange, error)
+	switch env {
+	case "demo":
+		steps = []func(context.Context, datlasSeedQueryDB) ([]SeedDataChange, error){
+			datlasSeedDiffDemoCompanies,
+			datlasSeedDiffDemoUsers,
+			datlasSeedDiffPruneDemoCompanies,
+		}
+	case "local":
+		steps = []func(context.Context, datlasSeedQueryDB) ([]SeedDataChange, error){
+			datlasSeedDiffLocalCompanies,
+			datlasSeedDiffLocalUsers,
+			datlasSeedDiffPruneLocalCompanies,
+		}
+	default:
+		return nil, fmt.Errorf("datlas: no seed data for environment %q", env)
+	}
+	var changes []SeedDataChange
+	for _, step := range steps {
+		diff, err := step(ctx, db)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, diff...)
+	}
+	return changes, nil
 }

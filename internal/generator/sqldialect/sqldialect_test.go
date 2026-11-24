@@ -28,6 +28,12 @@ func TestPostgres(t *testing.T) {
 		{d.DeleteExcept("roles", []string{"code"}, 2), `DELETE FROM "roles" WHERE "code" NOT IN ($1, $2)`},
 		{d.DeleteExcept("perms", []string{"role", "action"}, 2),
 			`DELETE FROM "perms" WHERE ("role", "action") NOT IN (($1, $2), ($3, $4))`},
+		{d.SelectExcept("app.roles", []string{"code"}, 0), `SELECT CAST("code" AS text) FROM "app"."roles" ORDER BY "code"`},
+		{d.SelectExcept("perms", []string{"role", "action"}, 2),
+			`SELECT CAST("role" AS text), CAST("action" AS text) FROM "perms" WHERE ("role", "action") NOT IN (($1, $2), ($3, $4)) ORDER BY "role", "action"`},
+		{d.Compare("roles", []string{"code"}, []string{"name", "perm"}),
+			`SELECT "name" IS DISTINCT FROM $2, "perm" IS DISTINCT FROM $3 FROM "roles" WHERE "code" = $1`},
+		{d.Compare("app.perms", []string{"role", "action"}, nil), `SELECT 1 FROM "app"."perms" WHERE "role" = $1 AND "action" = $2`},
 	}
 	for _, tt := range tests {
 		if tt.got != tt.want {

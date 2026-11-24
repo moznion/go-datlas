@@ -22,6 +22,12 @@ type Dialect interface {
 	// DeleteExcept deletes the rows whose keys are none of the given rows of keys.
 	// It takes rows*len(keys) parameters, row by row; with no rows it deletes every row.
 	DeleteExcept(table string, keys []string, rows int) string
+	// Compare selects, from the row having the given keys, whether each of cols is distinct from a value:
+	// one boolean per column, or a constant when cols is empty. It takes the keys, then the values of cols.
+	Compare(table string, keys, cols []string) string
+	// SelectExcept selects, as text and ordered by the keys, the keys of the rows DeleteExcept deletes.
+	// It takes the same parameters.
+	SelectExcept(table string, keys []string, rows int) string
 	// MaxParams is the largest number of parameters a statement can take.
 	MaxParams() int
 	// CheckIdentifier reports why name, a valid identifier (see ValidIdentifier) of a table,
@@ -192,15 +198,45 @@ func (d postgres) Upsert(u UpsertSpec) string {
 }
 
 func (d postgres) DeleteExcept(table string, keys []string, rows int) string {
+	return "DELETE FROM " + d.quote(table) + d.whereNotIn(keys, rows)
+}
+
+func (d postgres) SelectExcept(table string, keys []string, rows int) string {
+	casts := make([]string, len(keys))
+	for i, k := range keys {
+		casts[i] = fmt.Sprintf("CAST(%s AS text)", d.quote(k))
+	}
+	return fmt.Sprintf("SELECT %s FROM %s%s ORDER BY %s", strings.Join(casts, ", "), d.quote(table), d.whereNotIn(keys, rows), d.quoteAll(keys))
+}
+
+// whereNotIn returns the condition, from a space, matching the rows whose keys are none of the rows of keys.
+func (d postgres) whereNotIn(keys []string, rows int) string {
 	if rows == 0 {
-		return "DELETE FROM " + d.quote(table)
+		return ""
 	}
 	if len(keys) == 1 {
-		return fmt.Sprintf("DELETE FROM %s WHERE %s NOT IN (%s)", d.quote(table), d.quote(keys[0]), d.params(1, rows))
+		return fmt.Sprintf(" WHERE %s NOT IN (%s)", d.quote(keys[0]), d.params(1, rows))
 	}
 	tuples := make([]string, rows)
 	for i := range tuples {
 		tuples[i] = "(" + d.params(1+i*len(keys), len(keys)) + ")"
 	}
-	return fmt.Sprintf("DELETE FROM %s WHERE (%s) NOT IN (%s)", d.quote(table), d.quoteAll(keys), strings.Join(tuples, ", "))
+	return fmt.Sprintf(" WHERE (%s) NOT IN (%s)", d.quoteAll(keys), strings.Join(tuples, ", "))
+}
+
+// Compare compares with IS DISTINCT FROM, as skip_unchanged=true does, so NULL equals NULL.
+func (d postgres) Compare(table string, keys, cols []string) string {
+	sel := "1"
+	if len(cols) > 0 {
+		cmps := make([]string, len(cols))
+		for i, c := range cols {
+			cmps[i] = fmt.Sprintf("%s IS DISTINCT FROM $%d", d.quote(c), len(keys)+i+1)
+		}
+		sel = strings.Join(cmps, ", ")
+	}
+	conds := make([]string, len(keys))
+	for i, k := range keys {
+		conds[i] = fmt.Sprintf("%s = $%d", d.quote(k), i+1)
+	}
+	return fmt.Sprintf("SELECT %s FROM %s WHERE %s", sel, d.quote(table), strings.Join(conds, " AND "))
 }
