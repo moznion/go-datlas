@@ -1,5 +1,14 @@
 # Changelog
 
+## [v0.2.0](https://github.com/moznion/go-datlas/compare/v0.1.0...v0.2.0) - 2026-11-24
+
+- ci: attach attested cross-built binaries to tagpr releases by @moznion in https://github.com/moznion/go-datlas/pull/25
+- feat!: add db:"<column>,insertonly" to write a column on insert only by @moznion in https://github.com/moznion/go-datlas/pull/22
+- feat: add touch=<column> to set a column to the current time on update by @moznion in https://github.com/moznion/go-datlas/pull/23
+- feat: add skip_unchanged=true to leave rows already holding the values by @moznion in https://github.com/moznion/go-datlas/pull/24
+- fix: fail to apply records whose logical key is NULL by @moznion in https://github.com/moznion/go-datlas/pull/28
+- feat: add DiffMasterData and DiffSeedData to preview what applying would change by @moznion in https://github.com/moznion/go-datlas/pull/27
+
 ## [v0.1.0](https://github.com/moznion/go-datlas/compare/v0.0.2...v0.1.0) - 2026-11-21
 
 - feat: generate SQL applying master and seed data to a database by @moznion in https://github.com/moznion/go-datlas/pull/18
