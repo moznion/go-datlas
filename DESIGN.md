@@ -395,7 +395,9 @@ dialects implement one interface in the generator, so others can be added withou
   (`db:",insertonly"`, e.g. labels users rename). `touch=<column>` records when a row was updated, and
   `skip_unchanged=true` leaves the rows already holding the values, so that the touch column means
   "the master data changed this row". Skipping is an option, because it compares the columns, which
-  types without an equality operator (`json`, `xml`, geometric types) cannot do.
+  types without an equality operator (`json`, `xml`, geometric types) cannot do. It compares by the
+  equality of the types, so values equal but written differently (`1.0` and `1.00` as `numeric`) are
+  left as they are.
 - Master Data is the specification, so rows whose keys are not in it are deleted (prune), unless
   `prune=false`. Seed data tables also hold rows the application creates, so seed data prunes only
   with `prune=true`.

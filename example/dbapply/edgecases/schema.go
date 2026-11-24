@@ -1,6 +1,7 @@
 // Package edgecases holds datasets exercising edge cases of the generated SQL
 // (an empty dataset, a schema-qualified table, records without a key, an insert-only column of a table
-// shared with the application); see ../dbapply_test.go.
+// shared with the application, touch and skip_unchanged, also on a schema-qualified table);
+// see ../dbapply_test.go.
 package edgecases
 
 //go:generate go tool datlas master -dir master

@@ -208,6 +208,8 @@ func TestTableErrors(t *testing.T) {
 		}, want: "skip_unchanged=true requires a logical key"},
 		{name: "touch with only insert-only columns", files: master("//datlas:master roles table=r touch=updated_at", "\tName string `yaml:\"name\" db:\",insertonly\"`\n"), want: "touch=updated_at has no effect: every column but the keys is insertonly or there is none"},
 		{name: "touch with only keys", files: master("//datlas:master roles table=r touch=updated_at", ""), want: "touch=updated_at has no effect"},
+		{name: "skip_unchanged with only insert-only columns", files: master("//datlas:master roles table=r skip_unchanged=true", "\tName string `yaml:\"name\" db:\",insertonly\"`\n"), want: "skip_unchanged=true has no effect: every column but the keys is insertonly or there is none"},
+		{name: "skip_unchanged with only keys", files: master("//datlas:master roles table=r skip_unchanged=true", ""), want: "skip_unchanged=true has no effect"},
 		{name: "excluded key", files: map[string]string{
 			"schema.go":  "package data\n\n//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\" db:\"-\"`\n\tName string `yaml:\"name\"`\n}\n",
 			"roles.yaml": "[]\n",
