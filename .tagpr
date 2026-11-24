@@ -14,6 +14,8 @@
 #
 #   tagpr.release
 #       GitHub Release creation behavior after tagging [true, draft, false]
+#       It is a draft so that the release job in .github/workflows/tagpr.yml can attach
+#       the binary assets before publishing it (immutable releases forbid changing them after).
 #
 #   tagpr.majorLabels / tagpr.minorLabels
 #       Labels on merged pull requests that bump the major / minor version.
@@ -21,4 +23,4 @@
 	vPrefix = true
 	releaseBranch = main
 	versionFile = -
-	release = true
+	release = draft

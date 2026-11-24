@@ -27,6 +27,22 @@ datlas requires Go 1.26. Generated fixture factories import
 always resolved to the same version. `fixturekit` itself uses only the standard library.
 Generated master and seed data have no dependencies at all.
 
+### Prebuilt binaries
+
+Each [GitHub Release](https://github.com/moznion/go-datlas/releases) also ships prebuilt binaries
+for Linux, macOS and Windows (amd64 and arm64), named `datlas-<tag>-<os>-<arch>.tar.gz` (`.zip` on
+Windows), each with a `.sha256` checksum. Their build provenance is attested, so you can check that
+an archive was built from this repository's release workflow:
+
+```sh
+gh attestation verify datlas-<tag>-<os>-<arch>.tar.gz --repo moznion/go-datlas \
+  --signer-workflow moznion/go-datlas/.github/workflows/release-build.yml
+```
+
+A prebuilt binary is not tied to your module's `go.mod`, so keep its version in line with the
+`github.com/moznion/go-datlas` version your module requires for `fixturekit`. `go get -tool` does
+that for you.
+
 ## Commands
 
 ```
