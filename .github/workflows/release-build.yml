@@ -1,0 +1,119 @@
+name: Release build
+
+# Cross-builds the `datlas` binary archives of a release tag for every target
+# and attests their build provenance (SLSA, via actions/attest). Called from
+# tagpr.yml; the caller downloads the `datlas-dist` artifact and attaches its
+# files to the GitHub Release.
+#
+# Kept as a reusable workflow so the provenance names this file as the signer
+# (SLSA Build L3 isolation), which lets users pin it on verification:
+#
+#   gh attestation verify datlas-<tag>-<os>-<arch>.tar.gz --repo moznion/go-datlas \
+#     --signer-workflow moznion/go-datlas/.github/workflows/release-build.yml
+#
+# The build job only gets a read-only token; the signing permissions are
+# confined to the `attest` job, which runs no project code.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag (e.g. v1.2.3)
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag }}
+      # datlas is pure Go, so every target cross-compiles from this one runner.
+      TARGETS: >-
+        linux/amd64 linux/arm64
+        darwin/amd64 darwin/arm64
+        windows/amd64 windows/arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      # No build cache: release binaries are built from a clean slate.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # The binaries embed the module version from the checked-out tag (Go stamps
+      # it from VCS when HEAD is exactly at a clean tag), which `datlas version`
+      # prints. The archives are written outside the checkout so the tree stays
+      # clean; a dirty tree would stamp a "+dirty" pseudo-version instead.
+      - name: Build and archive
+        run: |
+          set -euo pipefail
+          dist="$RUNNER_TEMP/dist"
+          work="$RUNNER_TEMP/work"
+          mkdir -p "$dist" "$work"
+          mtime="$(git log -1 --format=%cI)"
+          for target in $TARGETS; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="datlas-${TAG}-${goos}-${goarch}"
+            ext=""
+            [ "$goos" = windows ] && ext=.exe
+            mkdir -p "$work/$name"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags='-s -w' -o "$work/$name/datlas$ext" ./cmd/datlas
+            cp README.md LICENSE "$work/$name/"
+            if [ "$goos" = windows ]; then
+              asset="$name.zip"
+              (cd "$work" && TZ=UTC find "$name" -exec touch -d "$mtime" {} + && zip -qrX "$dist/$asset" "$name")
+            else
+              asset="$name.tar.gz"
+              tar -C "$work" --sort=name --mtime="$mtime" --owner=0 --group=0 --numeric-owner \
+                -cf - "$name" | gzip -n > "$dist/$asset"
+            fi
+            (cd "$dist" && sha256sum "$asset" > "$asset.sha256")
+          done
+          echo "DIST=$dist" >> "$GITHUB_ENV"
+
+      - name: Check the embedded version
+        run: |
+          set -euo pipefail
+          got="$("$RUNNER_TEMP/work/datlas-${TAG}-linux-amd64/datlas" version)"
+          if [ "$got" != "datlas $TAG" ]; then
+            echo "::error::the binary reports '$got', want 'datlas $TAG'"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: datlas-dist
+          path: ${{ env.DIST }}/*
+          if-no-files-found: error
+          retention-days: 1
+
+  attest:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: datlas-dist
+          path: dist
+
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
