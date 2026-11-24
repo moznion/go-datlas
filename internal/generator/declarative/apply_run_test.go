@@ -293,3 +293,110 @@ func TestApply(t *testing.T) {
 	mustContain(t, testutil.ReadFile(t, path), `context2 "context"`, `sql2 "database/sql"`, `fmt2 "fmt"`, `json2 "encoding/json"`)
 	testutil.GoTest(t, dir, "./data")
 }
+
+// TestApplyNullKey makes the Value methods of logical keys return NULL, which matches no row:
+// upsert would insert the record again on every apply and prune (NOT IN) would delete nothing,
+// so the generated code fails instead.
+func TestApplyNullKey(t *testing.T) {
+	schema := `package data
+
+import (
+	"database/sql/driver"
+	"strconv"
+)
+
+// Nil makes the Value methods return NULL.
+var Nil bool
+
+// NKey implements driver.Valuer with a value receiver: it is passed as is.
+type NKey string
+
+func (k NKey) Value() (driver.Value, error) {
+	if Nil {
+		return nil, nil
+	}
+	return string(k), nil
+}
+
+// BKey implements driver.Valuer with a pointer receiver: its address is passed.
+type BKey struct{ N int }
+
+func (k *BKey) UnmarshalText(b []byte) error {
+	n, err := strconv.Atoi(string(b))
+	k.N = n
+	return err
+}
+
+// Value returns a nil []byte for NULL, which drivers write as NULL too.
+func (k *BKey) Value() (driver.Value, error) {
+	if Nil {
+		return []byte(nil), nil
+	}
+	return int64(k.N), nil
+}
+
+//datlas:master nkeys table=nkeys
+type NRow struct {
+	K NKey ` + "`yaml:\"k\" master:\"key\"`" + `
+}
+
+//datlas:seed bkeys table=bkeys prune=true
+type BRow struct {
+	G string ` + "`yaml:\"g\" seed:\"key\"`" + `
+	K BKey   ` + "`yaml:\"k\" seed:\"key\"`" + `
+}
+`
+	test := `package data_test
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+
+	"example.com/datlastest/data"
+)
+
+type recorder struct{ n int }
+
+func (r *recorder) ExecContext(context.Context, string, ...any) (sql.Result, error) { r.n++; return nil, nil }
+
+func TestNullKey(t *testing.T) {
+	var r recorder
+	if err := data.ApplyMasterData(context.Background(), &r); err != nil || r.n != 2 {
+		t.Fatalf("master: err = %v, %d statements", err, r.n)
+	}
+	if err := data.ApplySeedData(context.Background(), &r, "local"); err != nil || r.n != 4 {
+		t.Fatalf("seed: err = %v, %d statements", err, r.n)
+	}
+
+	data.Nil = true
+	defer func() { data.Nil = false }()
+	const null = " is NULL (its Value method returned nil), which matches no row: the record cannot be upserted nor kept by prune"
+	r = recorder{}
+	err := data.ApplyMasterData(context.Background(), &r)
+	if want := "datlas: upsert into nkeys: master data \"nkeys\" from nkeys.yaml, record #1: logical key K" + null; err == nil || err.Error() != want {
+		t.Errorf("master: err = %v\nwant  %s", err, want)
+	}
+	err = data.ApplySeedData(context.Background(), &r, "local")
+	if want := "datlas: upsert into bkeys: seed data \"bkeys\" (environment \"local\") from local/bkeys.yaml, record #1: logical key K" + null; err == nil || err.Error() != want {
+		t.Errorf("seed: err = %v\nwant  %s", err, want)
+	}
+	if r.n != 0 {
+		t.Errorf("%d statements executed", r.n)
+	}
+}
+`
+	dir := testutil.WriteTree(t, map[string]string{
+		"data/schema.go":          schema,
+		"data/run_test.go":        test,
+		"data/m/nkeys.yaml":       "- {k: a}\n",
+		"data/s/local/bkeys.yaml": "- {g: x, k: \"1\"}\n",
+	})
+	if _, err := run(MasterData, Config{Dir: dir, Package: "./data", DataDir: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run(SeedData, Config{Dir: dir, Package: "./data", DataDir: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	testutil.GoTest(t, dir, "./data")
+}

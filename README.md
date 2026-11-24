@@ -497,6 +497,10 @@ err = tx.Commit()
 
   Pointers to any of them write `NULL` when nil. Values JSON cannot hold fail generation: maps with
   `bool` keys, and NaN and infinities in JSON columns.
+- Logical keys are never `NULL`: key fields cannot be pointers. A `NULL` key would match no row, so the
+  record would be inserted again on every apply and prune would delete nothing. Since the `Value`
+  method of a `driver.Valuer` key only runs when applying, the Apply functions fail on a record
+  whose key `Value` returns nil (`logical key Code is NULL ...`) before writing it.
 - Table and column names are quoted in statements, which makes them case-sensitive in PostgreSQL, while
   unquoted names in DDL are folded to lower case. Names with upper-case letters therefore fail
   generation; give lower-case column names with `db` tags (`db:"user_id"` for a YAML key `userId`).
