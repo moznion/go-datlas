@@ -102,6 +102,18 @@ func TestApplyUpsertOptions(t *testing.T) {
 	)
 }
 
+// TestApplyOnlyInsertOnly checks that a dataset whose columns but the keys are all insert-only
+// leaves existing rows alone.
+func TestApplyOnlyInsertOnly(t *testing.T) {
+	schema := "package data\n\n//datlas:master roles table=roles prune=false\ntype R struct {\n" +
+		"\tID string `yaml:\"id\" master:\"key\"`\n\tLabel string `yaml:\"label\" db:\",insertonly\"`\n}\n"
+	path, err := generate(t, MasterData, map[string]string{"schema.go": schema, "roles.yaml": "- {id: a, label: A}\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, testutil.ReadFile(t, path), `INSERT INTO "roles" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`)
+}
+
 func TestApplyMasterDataAbsentWithoutTables(t *testing.T) {
 	path, err := generate(t, MasterData, map[string]string{"schema.go": roleSchema, "roles.yaml": "[]\n"})
 	if err != nil {
@@ -160,6 +172,7 @@ func TestTableErrors(t *testing.T) {
 		{name: "invalid column", files: master("//datlas:master roles table=r", "\tName string `yaml:\"the-name\"`\n"), want: `invalid column name "the-name"`},
 		{name: "db tag options", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,omitempty\"`\n"), want: `unknown db tag option "omitempty" (available: insertonly)`},
 		{name: "repeated insertonly", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\",insertonly,insertonly\"`\n"), want: `repeated db tag option "insertonly"`},
+		{name: "excluded with options", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"-,insertonly\"`\n"), want: `"-,insertonly" excludes the field, which takes no options`},
 		{name: "trailing comma", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,\"`\n"), want: `empty db tag option in "name," (available: insertonly)`},
 		{name: "trailing comma after insertonly", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,insertonly,\"`\n"), want: `empty db tag option in "name,insertonly,"`},
 		{name: "insertonly keyless seed", kind: SeedData, files: map[string]string{

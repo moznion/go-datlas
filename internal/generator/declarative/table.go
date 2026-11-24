@@ -92,6 +92,9 @@ func parseDBTag(tag string) (dbTag, error) {
 	if !hasOpts {
 		return t, nil
 	}
+	if name == "-" {
+		return dbTag{}, fmt.Errorf("%q excludes the field, which takes no options; use %s:\"-\" alone", v, DBTagKey)
+	}
 	for _, o := range strings.Split(opts, ",") {
 		switch {
 		case o == "":
