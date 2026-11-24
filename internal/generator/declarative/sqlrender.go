@@ -167,8 +167,15 @@ func (r *sqlRenderer) renderRow(ds *Dataset) {
 	fmt.Fprintf(b, "\n// %sRow%s returns the values of the columns of table %s for a record.\n", p, naming.Camel(ds.Name), ds.Table.Name)
 	fmt.Fprintf(b, "func %sRow%s(datlasRec %s) ([]any, error) {\n", p, naming.Camel(ds.Name), typ)
 	var args []string
+	isKey := map[int]bool{}
+	for _, k := range ds.Table.Keys {
+		isKey[k] = true
+	}
 	for i, c := range ds.Table.Columns {
 		field := "datlasRec." + c.Path
+		if isKey[i] && (c.Valuer || c.Enc == encDirectAddr) {
+			r.renderKeyCheck(c)
+		}
 		v := "datlasCol" + strconv.Itoa(i)
 		var encode string
 		switch {
@@ -200,6 +207,20 @@ func (r *sqlRenderer) renderRow(ds *Dataset) {
 		}
 	}
 	fmt.Fprintf(b, "return []any{%s}, nil\n}\n", strings.Join(args, ", "))
+}
+
+// renderKeyCheck renders the check that the value of the logical key column c is not NULL.
+// Logical keys are never pointers and their values are known when generating, but the Value
+// method of a driver.Valuer only runs when applying. A NULL key matches no row: ON CONFLICT would
+// insert the record again on every apply, and NOT IN would make prune delete nothing.
+func (r *sqlRenderer) renderKeyCheck(c Column) {
+	field := "datlasRec." + c.Path
+	fmt.Fprintf(r.b, `if datlasKey, err := %[1]s.Value(); err != nil {
+return nil, %[2]s.Errorf("encode %[3]s: %%w", err)
+} else if datlasBytes, ok := datlasKey.([]byte); datlasKey == nil || ok && datlasBytes == nil {
+return nil, %[2]s.Errorf("logical key %[3]s is NULL (its Value method returned nil), which matches no row: the record cannot be upserted nor kept by prune")
+}
+`, field, r.fmtPkg, c.Path)
 }
 
 // renderDataset renders the statements of the dataset and the functions executing them.
