@@ -268,8 +268,7 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 		var (
 			singular string
 			noConsts bool
-			table    string
-			prune    = kind == MasterData
+			tblOpts  = tableOptions{prune: kind == MasterData}
 			seenOpt  = map[string]bool{}
 		)
 		for _, opt := range d.Args[1:] {
@@ -285,11 +284,19 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 				seenOpt[k] = true
 				continue
 			case k == "table" && v != "":
-				table = v
+				tblOpts.name = v
 				seenOpt[k] = true
 				continue
 			case k == "prune" && (kind == MasterData && v == "false" || kind == SeedData && v == "true"):
-				prune = !prune
+				tblOpts.prune = !tblOpts.prune
+				seenOpt[k] = true
+				continue
+			case k == "touch" && v != "":
+				tblOpts.touch = v
+				seenOpt[k] = true
+				continue
+			case k == "skip_unchanged" && v == "true":
+				tblOpts.skipUnchanged = true
 				seenOpt[k] = true
 				continue
 			}
@@ -299,6 +306,7 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 			} else {
 				available += ", prune=true"
 			}
+			available += ", touch=<column>, skip_unchanged=true"
 			errs = append(errs, fmt.Errorf("%s: //datlas:%s: unknown or repeated option %q (available: %s)", d.Pos, kind.directive(), opt, available))
 		}
 		if !validDatasetName(name) {
@@ -327,14 +335,22 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 		}
 		var tbl *Table
 		switch {
-		case table != "":
-			if tbl, err = tableOf(kind, d, schema, table, prune, enums, dialect); err != nil {
+		case tblOpts.name != "":
+			if tbl, err = tableOf(kind, d, schema, tblOpts, enums, dialect); err != nil {
 				errs = append(errs, err)
 				continue
 			}
-		case seenOpt["prune"]:
-			errs = append(errs, fmt.Errorf("%s: //datlas:%s: prune has no effect without table=<name>", d.Pos, kind.directive()))
-			continue
+		default:
+			var orphan []string
+			for _, o := range []string{"prune", "touch", "skip_unchanged"} {
+				if seenOpt[o] {
+					orphan = append(orphan, o)
+				}
+			}
+			if len(orphan) > 0 {
+				errs = append(errs, fmt.Errorf("%s: //datlas:%s: %s has no effect without table=<name>", d.Pos, kind.directive(), strings.Join(orphan, ", ")))
+				continue
+			}
 		}
 		result = append(result, namedSchema{name: name, singular: singular, noConsts: noConsts, table: tbl, directive: d, schema: schema})
 	}

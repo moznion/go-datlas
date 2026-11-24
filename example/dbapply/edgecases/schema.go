@@ -26,3 +26,18 @@ type Event struct {
 type Tag struct {
 	Name string `yaml:"name" seed:"key"`
 }
+
+// Grade shares its table with rows the application creates (company_id set), so it does not prune.
+// Its label is written on insert only, and updated_at moves only when the permission changes.
+//
+//datlas:master grades table=grades prune=false touch=updated_at skip_unchanged=true
+type Grade struct {
+	ID         string          `yaml:"id" master:"key"`
+	Label      string          `yaml:"label" db:",insertonly"`
+	Permission GradePermission `yaml:"permission"`
+}
+
+// GradePermission is written to a jsonb column.
+type GradePermission struct {
+	Actions []string `yaml:"actions" json:"actions"`
+}

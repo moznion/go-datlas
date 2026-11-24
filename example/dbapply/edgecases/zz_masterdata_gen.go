@@ -5,6 +5,7 @@ package edgecases
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 )
 
@@ -13,7 +14,7 @@ import (
 // Datasets without an order between them are in name order. Datasets referring to each other
 // in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
 func MasterDatasets() []string {
-	return []string{"flags"}
+	return []string{"flags", "grades"}
 }
 
 // Flags returns the master data "flags", compiled from flags.yaml.
@@ -28,6 +29,55 @@ func Flags() []Flag {
 //datlas:keys flags
 func FlagByName(key string) (Flag, bool) {
 	return Flag{}, false
+}
+
+// Logical keys of Grades (ID).
+const (
+	GradeID0191d3a0000070008000000000000001 string = "0191d3a0-0000-7000-8000-000000000001"
+	GradeID0191d3a0000070008000000000000002 string = "0191d3a0-0000-7000-8000-000000000002"
+)
+
+// Grades returns the master data "grades", compiled from grades.yaml.
+// Each call returns a new copy that the caller may modify freely.
+func Grades() []Grade {
+	return []Grade{
+		datlasMasterGrades0(),
+		datlasMasterGrades1(),
+	}
+}
+
+// GradeByID returns the record of Grades whose ID equals the given value.
+// Each call returns a new copy.
+//
+//datlas:keys grades
+func GradeByID(key string) (Grade, bool) {
+	switch key {
+	case "0191d3a0-0000-7000-8000-000000000001":
+		return datlasMasterGrades0(), true
+	case "0191d3a0-0000-7000-8000-000000000002":
+		return datlasMasterGrades1(), true
+	}
+	return Grade{}, false
+}
+
+func datlasMasterGrades0() Grade {
+	return Grade{
+		ID:    "0191d3a0-0000-7000-8000-000000000001",
+		Label: "Owner",
+		Permission: GradePermission{
+			Actions: []string{"read", "write"},
+		},
+	}
+}
+
+func datlasMasterGrades1() Grade {
+	return Grade{
+		ID:    "0191d3a0-0000-7000-8000-000000000002",
+		Label: "Viewer",
+		Permission: GradePermission{
+			Actions: []string{"read"},
+		},
+	}
 }
 
 // datlasMasterRowFlags returns the values of the columns of table config.flags for a record.
@@ -65,6 +115,29 @@ func datlasMasterPruneFlags(ctx context.Context, db datlasMasterDB) error {
 	return nil
 }
 
+// datlasMasterRowGrades returns the values of the columns of table grades for a record.
+func datlasMasterRowGrades(datlasRec Grade) ([]any, error) {
+	datlasCol2, err := json.Marshal(datlasRec.Permission)
+	if err != nil {
+		return nil, fmt.Errorf("encode Permission: %w", err)
+	}
+	return []any{datlasRec.ID, datlasRec.Label, string(datlasCol2)}, nil
+}
+
+// datlasMasterUpsertGrades applies the records of Grades to table grades.
+func datlasMasterUpsertGrades(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Grades() {
+		args, err := datlasMasterRowGrades(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "grades" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP WHERE "grades"."permission" IS DISTINCT FROM EXCLUDED."permission"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into grades: master data "grades" from grades.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
 // datlasMasterDB is the database the master data is applied to.
 type datlasMasterDB = interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
@@ -79,6 +152,7 @@ func ApplyMasterData(ctx context.Context, db interface {
 }) error {
 	for _, step := range []func(context.Context, datlasMasterDB) error{
 		datlasMasterUpsertFlags,
+		datlasMasterUpsertGrades,
 		datlasMasterPruneFlags,
 	} {
 		if err := step(ctx, db); err != nil {

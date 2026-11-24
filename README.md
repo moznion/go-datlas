@@ -405,6 +405,36 @@ err = tx.Commit()
 - Each record is upserted by its logical key (`INSERT ... ON CONFLICT (key) DO UPDATE`), so the key
   columns need a primary key or unique constraint. Records of seed data without a key are inserted,
   so applying them twice inserts them twice.
+- Updating rows: the update writes every column except the keys. Options of the directive and of
+  `db` tags narrow it:
+
+  ```go
+  //datlas:master roles table=roles prune=false touch=updated_at skip_unchanged=true
+  type RoleDefinition struct {
+  	ID         string     `yaml:"id" master:"key"`
+  	Label      string     `yaml:"label" db:",insertonly"` // written on insert only
+  	Permission Permission `yaml:"permission"`
+  }
+  ```
+
+  ```sql
+  INSERT INTO "roles" ("id", "label", "permission") VALUES ($1, $2, $3)
+  ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP
+  WHERE "roles"."permission" IS DISTINCT FROM EXCLUDED."permission"
+  ```
+
+  - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
+    the row is inserted and leaves it alone when the row is updated, e.g. a label users may rename.
+    Key fields cannot be insert-only. When every column but the keys is insert-only, existing rows are
+    left alone (`DO NOTHING`).
+  - `touch=<column>` sets the column to the current time when a row is updated. The column is not a field
+    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`).
+  - `skip_unchanged=true` leaves the rows whose updated columns already hold the values of the record,
+    so their touch column does not move and no update trigger fires. It compares the columns with
+    `IS DISTINCT FROM`, which needs an equality operator for their types: use `jsonb`, not `json`.
+  - Both options need a logical key, since records without one are only inserted.
+  - The keys are the `ON CONFLICT` target, which must match a unique constraint or index without a
+    predicate: a partial unique index (`... WHERE company_id IS NULL`) is not matched.
 - **Prune**: after upserting, the rows whose keys are not in the data are deleted. Master data prunes
   by default (`prune=false` disables it); seed data prunes only with `prune=true`, since its tables
   usually hold rows the application creates too. A seed data environment without a file for the

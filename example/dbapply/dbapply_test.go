@@ -158,9 +158,13 @@ func TestApplyPostgres(t *testing.T) {
 
 const edgeDDL = `
 DROP SCHEMA IF EXISTS config CASCADE;
-DROP TABLE IF EXISTS events, tags;
+DROP TABLE IF EXISTS events, tags, grades;
 CREATE SCHEMA config;
 CREATE TABLE config.flags (name text PRIMARY KEY);
+CREATE TABLE grades (
+	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL,
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE events (kind text NOT NULL, payload jsonb NOT NULL);
 CREATE TABLE tags (name text PRIMARY KEY);
 INSERT INTO config.flags VALUES ('stale');
@@ -186,6 +190,52 @@ func TestApplyPostgresEdgeCases(t *testing.T) {
 		`SELECT count(*)::text FROM events`:                              "4",
 		`SELECT payload::text FROM events WHERE kind = 'signup' LIMIT 1`: `{"plan": "free"}`,
 		`SELECT payload::text FROM events WHERE kind = 'login' LIMIT 1`:  `{}`,
+	} {
+		if got := query[string](t, db, q); got != want {
+			t.Errorf("%s = %q, want %q", q, got, want)
+		}
+	}
+}
+
+// TestApplyPostgresUpsertOptions applies grades, whose label is insert-only and whose rows are updated,
+// with updated_at, only when the permission changes, to a table also holding rows of the application.
+func TestApplyPostgresUpsertOptions(t *testing.T) {
+	db := openDB(t, edgeDDL)
+	exec := func(stmts ...string) {
+		t.Helper()
+		for _, stmt := range stmts {
+			if _, err := db.ExecContext(t.Context(), stmt); err != nil {
+				t.Fatalf("%s: %v", stmt, err)
+			}
+		}
+	}
+	applyMaster := func() {
+		t.Helper()
+		if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const owner, viewer = `'0191d3a0-0000-7000-8000-000000000001'`, `'0191d3a0-0000-7000-8000-000000000002'`
+
+	applyMaster()
+	exec(
+		// The application creates a row of its own and renames a label.
+		`INSERT INTO grades (label, company_id, permission) VALUES ('Custom', 'acme', '{}')`,
+		`UPDATE grades SET label = 'Edited' WHERE id = `+owner,
+		`UPDATE grades SET permission = '{"actions": []}' WHERE id = `+viewer,
+		`UPDATE grades SET updated_at = '2000-01-01T00:00:00Z'`,
+	)
+	applyMaster()
+
+	for q, want := range map[string]string{
+		// The label is written on insert only, so the renamed one stays.
+		`SELECT string_agg(label, ',' ORDER BY label) FROM grades`: "Custom,Edited,Viewer",
+		// The changed permission is restored, and only that row is touched.
+		`SELECT permission::text FROM grades WHERE id = ` + viewer:                            `{"actions": ["read"]}`,
+		`SELECT (updated_at > '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + viewer: "true",
+		`SELECT (updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + owner:  "true",
+		// prune=false leaves the rows of the application.
+		`SELECT (updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE company_id = 'acme'`: "true",
 	} {
 		if got := query[string](t, db, q); got != want {
 			t.Errorf("%s = %q, want %q", q, got, want)

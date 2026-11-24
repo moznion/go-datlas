@@ -9,10 +9,21 @@ func TestPostgres(t *testing.T) {
 	}
 	tests := []struct{ got, want string }{
 		{d.Insert("app.users", []string{"email", "name"}), `INSERT INTO "app"."users" ("email", "name") VALUES ($1, $2)`},
-		{d.Upsert("roles", []string{"code", "name"}, []string{"code"}),
+		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"code", "name"}, Keys: []string{"code"}}),
 			`INSERT INTO "roles" ("code", "name") VALUES ($1, $2) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name"`},
-		{d.Upsert("perms", []string{"role", "action"}, []string{"role", "action"}),
+		{d.Upsert(UpsertSpec{Table: "perms", Cols: []string{"role", "action"}, Keys: []string{"role", "action"}}),
 			`INSERT INTO "perms" ("role", "action") VALUES ($1, $2) ON CONFLICT ("role", "action") DO NOTHING`},
+		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "label", "perm"}, Keys: []string{"id"}, InsertOnly: []string{"label"}}),
+			`INSERT INTO "roles" ("id", "label", "perm") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm"`},
+		// Every column but the key is insert-only: nothing to update, so the touch column is left alone too.
+		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "label"}, Keys: []string{"id"}, InsertOnly: []string{"label"}, Touch: "updated_at", SkipUnchanged: true}),
+			`INSERT INTO "roles" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`},
+		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "perm"}, Keys: []string{"id"}, Touch: "updated_at"}),
+			`INSERT INTO "roles" ("id", "perm") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP`},
+		{d.Upsert(UpsertSpec{Table: "app.roles", Cols: []string{"id", "perm"}, Keys: []string{"id"}, Touch: "updated_at", SkipUnchanged: true}),
+			`INSERT INTO "app"."roles" ("id", "perm") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP WHERE "app"."roles"."perm" IS DISTINCT FROM EXCLUDED."perm"`},
+		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "name", "perm"}, Keys: []string{"id"}, SkipUnchanged: true}),
+			`INSERT INTO "roles" ("id", "name", "perm") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name", "perm" = EXCLUDED."perm" WHERE ("roles"."name", "roles"."perm") IS DISTINCT FROM (EXCLUDED."name", EXCLUDED."perm")`},
 		{d.DeleteExcept("roles", []string{"code"}, 0), `DELETE FROM "roles"`},
 		{d.DeleteExcept("roles", []string{"code"}, 2), `DELETE FROM "roles" WHERE "code" NOT IN ($1, $2)`},
 		{d.DeleteExcept("perms", []string{"role", "action"}, 2),

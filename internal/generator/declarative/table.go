@@ -12,13 +12,23 @@ import (
 )
 
 // DBTagKey is the struct tag key naming the column of a field, e.g. `db:"price"`, or excluding it (`db:"-"`).
+// The option insertonly (`db:"label,insertonly"`, or `db:",insertonly"` keeping the default name)
+// writes the column when a row is inserted, not when it is updated.
 const DBTagKey = "db"
+
+// dbTagInsertOnly is the option of the db tag writing a column on insert only.
+const dbTagInsertOnly = "insertonly"
 
 // Table maps a dataset to a database table (`table=<name>` in the directive).
 type Table struct {
 	Name string
 	// Prune deletes the rows whose keys are not in the dataset after applying it.
 	Prune bool
+	// Touch is a column, not filled from the records, set to the current time when a row is updated
+	// (touch=<column>), or empty.
+	Touch string
+	// SkipUnchanged leaves the rows whose columns already hold the values of the record (skip_unchanged=true).
+	SkipUnchanged bool
 	// Columns are the columns written for each record, in field order.
 	Columns []Column
 	// Keys are the indexes in Columns of the logical key, in the order of Schema.Keys.
@@ -54,29 +64,55 @@ type Column struct {
 	// Valuer is true when the field implements driver.Valuer. A nil pointer is then passed as an
 	// untyped nil: database/sql would call a Value method with a pointer receiver on it.
 	Valuer bool
+	// InsertOnly is true when the column is written on insert only (`db:"<column>,insertonly"`).
+	InsertOnly bool
 }
 
-// parseDBTag returns the column name given by the `db` tag, whether the field is excluded,
-// and whether the tag is present.
-func parseDBTag(tag string) (name string, skip bool, err error) {
+// tableOptions are the options of the directive mapping a dataset to a table.
+type tableOptions struct {
+	name          string
+	prune         bool
+	touch         string
+	skipUnchanged bool
+}
+
+// dbTag is a parsed `db` tag.
+type dbTag struct {
+	// name is the column name, or empty for the default.
+	name string
+	// skip excludes the field (`db:"-"`).
+	skip       bool
+	insertOnly bool
+}
+
+// parseDBTag parses the `db` tag of a field.
+func parseDBTag(tag string) (dbTag, error) {
 	v, ok := reflect.StructTag(tag).Lookup(DBTagKey)
 	if !ok {
-		return "", false, nil
+		return dbTag{}, nil
 	}
 	if v == "-" {
-		return "", true, nil
+		return dbTag{skip: true}, nil
 	}
 	name, opts, _ := strings.Cut(v, ",")
-	if opts != "" {
-		return "", false, fmt.Errorf("unknown %s tag options %q (only the column name or \"-\" is supported)", DBTagKey, opts)
+	t := dbTag{name: name}
+	if opts == "" {
+		return t, nil
 	}
-	return name, false, nil
+	for _, o := range strings.Split(opts, ",") {
+		if o != dbTagInsertOnly || t.insertOnly {
+			return dbTag{}, fmt.Errorf("unknown or repeated %s tag option %q (available: %s)", DBTagKey, o, dbTagInsertOnly)
+		}
+		t.insertOnly = true
+	}
+	return t, nil
 }
 
 // tableOf maps the schema to the columns of table. Inline structs are flattened;
 // every other field is one column, named by its `db` tag or else by its YAML key.
-func tableOf(kind Kind, d loader.Directive, schema Schema, table string, prune bool, enums *loader.Enums, dialect sqldialect.Dialect) (*Table, error) {
+func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, enums *loader.Enums, dialect sqldialect.Dialect) (*Table, error) {
 	ctx := fmt.Sprintf("%s: %s", d.Pos, d.Type.Name())
+	table, prune := opts.name, opts.prune
 	if !sqldialect.ValidTable(table) {
 		return nil, fmt.Errorf("%s: invalid table name %q (an identifier of letters, digits and '_', optionally qualified by a schema: schema.table)", ctx, table)
 	}
@@ -88,7 +124,25 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, table string, prune b
 	if prune && len(schema.Keys) == 0 {
 		return nil, fmt.Errorf("%s: prune=true requires a logical key (`%s:\"key\"`) to tell the records of the dataset", ctx, kind.tagKey())
 	}
-	t := &Table{Name: table, Prune: prune}
+	if len(schema.Keys) == 0 {
+		for _, o := range []struct {
+			name string
+			set  bool
+		}{{"touch=<column>", opts.touch != ""}, {"skip_unchanged=true", opts.skipUnchanged}} {
+			if o.set {
+				return nil, fmt.Errorf("%s: %s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, o.name, kind.tagKey())
+			}
+		}
+	}
+	if opts.touch != "" {
+		if !sqldialect.ValidIdentifier(opts.touch) {
+			return nil, fmt.Errorf("%s: invalid touch column name %q (letters, digits and '_')", ctx, opts.touch)
+		}
+		if err := dialect.CheckIdentifier(opts.touch); err != nil {
+			return nil, fmt.Errorf("%s: touch column name: %w", ctx, err)
+		}
+	}
+	t := &Table{Name: table, Prune: prune, Touch: opts.touch, SkipUnchanged: opts.skipUnchanged}
 	var (
 		errs   []error
 		byName = map[string]string{}
@@ -99,16 +153,17 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, table string, prune b
 		for _, f := range yamlFields(st) {
 			fpath := path + f.v.Name()
 			fctx := fmt.Sprintf("%s.%s", ctx, fpath)
-			name, skip, err := parseDBTag(f.rawTag)
+			tag, err := parseDBTag(f.rawTag)
 			switch {
 			case err != nil:
 				errs = append(errs, fmt.Errorf("%s: %w", fctx, err))
 				continue
-			case skip:
+			case tag.skip:
 				continue
 			}
+			name := tag.name
 			if f.tag.inline {
-				if name != "" {
+				if name != "" || tag.insertOnly {
 					errs = append(errs, fmt.Errorf("%s: an inline struct has no column of its own; tag its fields instead", fctx))
 					continue
 				}
@@ -130,12 +185,17 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, table string, prune b
 				errs = append(errs, fmt.Errorf("%s: column %q is also used by %s", fctx, name, prev))
 				continue
 			}
+			if name == opts.touch {
+				errs = append(errs, fmt.Errorf("%s: column %q is the touch column, which is set to the current time rather than written from the records", fctx, name))
+				continue
+			}
 			byName[name] = fpath
 			col, err := columnOf(name, fpath, f.v, enums)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", fctx, err))
 				continue
 			}
+			col.InsertOnly = tag.insertOnly
 			byVar[f.v] = len(t.Columns)
 			t.Columns = append(t.Columns, col)
 		}
@@ -145,6 +205,10 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, table string, prune b
 		i, ok := byVar[k]
 		if !ok {
 			errs = append(errs, fmt.Errorf("%s.%s: a logical key field cannot be excluded from the table", ctx, k.Name()))
+			continue
+		}
+		if t.Columns[i].InsertOnly {
+			errs = append(errs, fmt.Errorf("%s.%s: a logical key field cannot be %s: the keys are never updated", ctx, k.Name(), dbTagInsertOnly))
 			continue
 		}
 		t.Keys = append(t.Keys, i)

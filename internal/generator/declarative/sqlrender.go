@@ -220,7 +220,14 @@ func (r *sqlRenderer) renderDataset(ds *Dataset) error {
 	stmt := d.Insert(t.Name, cols)
 	action := "insert into"
 	if len(keys) > 0 {
-		stmt, action = d.Upsert(t.Name, cols, keys), "upsert into"
+		var insertOnly []string
+		for _, c := range t.Columns {
+			if c.InsertOnly {
+				insertOnly = append(insertOnly, c.Name)
+			}
+		}
+		stmt = d.Upsert(sqldialect.UpsertSpec{Table: t.Name, Cols: cols, Keys: keys, InsertOnly: insertOnly, Touch: t.Touch, SkipUnchanged: t.SkipUnchanged})
+		action = "upsert into"
 	}
 	row := p + "Row" + naming.Camel(ds.Name)
 	fmt.Fprintf(b, `
