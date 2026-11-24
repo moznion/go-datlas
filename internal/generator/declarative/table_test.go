@@ -199,7 +199,7 @@ func TestTableErrors(t *testing.T) {
 		{name: "touch keyless seed", kind: SeedData, files: map[string]string{
 			"schema.go":         "package data\n\n//datlas:seed events table=events touch=updated_at\ntype E struct {\n\tA string\n}\n",
 			"local/events.yaml": "[]\n",
-		}, want: "touch=<column> requires a logical key"},
+		}, want: "touch=updated_at requires a logical key"},
 		{name: "touch with only insert-only columns", files: master("//datlas:master roles table=r touch=updated_at", "\tName string `yaml:\"name\" db:\",insertonly\"`\n"), want: "touch=updated_at has no effect: every column but the keys is insertonly or there is none"},
 		{name: "touch with only keys", files: master("//datlas:master roles table=r touch=updated_at", ""), want: "touch=updated_at has no effect"},
 		{name: "excluded key", files: map[string]string{

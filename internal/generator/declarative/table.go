@@ -131,7 +131,7 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 		return nil, fmt.Errorf("%s: prune=true requires a logical key (`%s:\"key\"`) to tell the records of the dataset", ctx, kind.tagKey())
 	}
 	if opts.touch != "" && len(schema.Keys) == 0 {
-		return nil, fmt.Errorf("%s: touch=<column> requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, kind.tagKey())
+		return nil, fmt.Errorf("%s: touch=%s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, opts.touch, kind.tagKey())
 	}
 	if opts.touch != "" {
 		if !sqldialect.ValidIdentifier(opts.touch) {
