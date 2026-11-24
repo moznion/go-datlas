@@ -24,6 +24,9 @@ type Table struct {
 	Name string
 	// Prune deletes the rows whose keys are not in the dataset after applying it.
 	Prune bool
+	// Touch is a column, not filled from the records, set to the current time when a row is updated
+	// (touch=<column>), or empty.
+	Touch string
 	// Columns are the columns written for each record, in field order.
 	Columns []Column
 	// Keys are the indexes in Columns of the logical key, in the order of Schema.Keys.
@@ -67,6 +70,7 @@ type Column struct {
 type tableOptions struct {
 	name  string
 	prune bool
+	touch string
 }
 
 // dbTag is a parsed `db` tag.
@@ -126,11 +130,25 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	if prune && len(schema.Keys) == 0 {
 		return nil, fmt.Errorf("%s: prune=true requires a logical key (`%s:\"key\"`) to tell the records of the dataset", ctx, kind.tagKey())
 	}
-	t := &Table{Name: table, Prune: prune}
+	if opts.touch != "" && len(schema.Keys) == 0 {
+		return nil, fmt.Errorf("%s: touch=%s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, opts.touch, kind.tagKey())
+	}
+	if opts.touch != "" {
+		if !sqldialect.ValidIdentifier(opts.touch) {
+			return nil, fmt.Errorf("%s: invalid touch column name %q (letters, digits and '_')", ctx, opts.touch)
+		}
+		if err := dialect.CheckIdentifier(opts.touch); err != nil {
+			return nil, fmt.Errorf("%s: touch column name: %w", ctx, err)
+		}
+	}
+	t := &Table{Name: table, Prune: prune, Touch: opts.touch}
 	var (
 		errs   []error
 		byName = map[string]string{}
 		byVar  = map[*types.Var]int{}
+		// excluded are the fields excluded with `db:"-"`. Other fields missing from byVar were rejected
+		// with an error of their own.
+		excluded = map[*types.Var]bool{}
 	)
 	var walk func(st *types.Struct, path string)
 	walk = func(st *types.Struct, path string) {
@@ -143,6 +161,7 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 				errs = append(errs, fmt.Errorf("%s: %w", fctx, err))
 				continue
 			case tag.skip:
+				excluded[f.v] = true
 				continue
 			}
 			name := tag.name
@@ -173,6 +192,10 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 				errs = append(errs, fmt.Errorf("%s: column %q is also used by %s", fctx, name, prev))
 				continue
 			}
+			if name == opts.touch {
+				errs = append(errs, fmt.Errorf("%s: column %q is the touch column, which is set to the current time rather than written from the records", fctx, name))
+				continue
+			}
 			byName[name] = fpath
 			col, err := columnOf(name, fpath, f.v, enums)
 			if err != nil {
@@ -192,7 +215,9 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	for _, k := range schema.Keys {
 		i, ok := byVar[k]
 		if !ok {
-			errs = append(errs, fmt.Errorf("%s.%s: a logical key field cannot be excluded from the table", ctx, k.Name()))
+			if excluded[k] {
+				errs = append(errs, fmt.Errorf("%s.%s: a logical key field cannot be excluded from the table", ctx, k.Name()))
+			}
 			continue
 		}
 		if t.Columns[i].InsertOnly {
@@ -204,7 +229,25 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	if len(t.Columns) == 0 && len(errs) == 0 {
 		errs = append(errs, fmt.Errorf("%s: table %s has no columns", ctx, table))
 	}
+	if opts.touch != "" && len(errs) == 0 && !t.updates() {
+		errs = append(errs, fmt.Errorf("%s: touch=%s has no effect: every column but the keys is %s or there is none, so existing rows are never updated", ctx, opts.touch, dbTagInsertOnly))
+	}
 	return t, errors.Join(errs...)
+}
+
+// updates reports whether the upsert of the table updates a column of existing rows:
+// a column that is neither a key nor insert-only.
+func (t *Table) updates() bool {
+	isKey := map[int]bool{}
+	for _, k := range t.Keys {
+		isKey[k] = true
+	}
+	for i, c := range t.Columns {
+		if !isKey[i] && !c.InsertOnly {
+			return true
+		}
+	}
+	return false
 }
 
 // columnOf decides how the values of a field of type t are passed to the database.

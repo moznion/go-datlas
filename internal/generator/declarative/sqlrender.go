@@ -226,7 +226,7 @@ func (r *sqlRenderer) renderDataset(ds *Dataset) error {
 				insertOnly = append(insertOnly, c.Name)
 			}
 		}
-		stmt = d.Upsert(sqldialect.UpsertSpec{Table: t.Name, Cols: cols, Keys: keys, InsertOnly: insertOnly})
+		stmt = d.Upsert(sqldialect.UpsertSpec{Table: t.Name, Cols: cols, Keys: keys, InsertOnly: insertOnly, Touch: t.Touch})
 		action = "upsert into"
 	}
 	row := p + "Row" + naming.Camel(ds.Name)

@@ -163,7 +163,8 @@ CREATE SCHEMA config;
 CREATE TABLE config.flags (name text PRIMARY KEY);
 CREATE TABLE excluded (name text PRIMARY KEY, value text NOT NULL);
 CREATE TABLE grades (
-	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL
+	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL,
+	updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE events (kind text NOT NULL, payload jsonb NOT NULL);
 CREATE TABLE tags (name text PRIMARY KEY);
@@ -197,8 +198,8 @@ func TestApplyPostgresEdgeCases(t *testing.T) {
 	}
 }
 
-// TestApplyPostgresUpsertOptions applies grades, whose label is insert-only, to a table also holding
-// rows of the application.
+// TestApplyPostgresUpsertOptions applies grades, whose label is insert-only and whose updated_at moves
+// when a row is updated, to a table also holding rows of the application.
 func TestApplyPostgresUpsertOptions(t *testing.T) {
 	db := openDB(t, edgeDDL)
 	exec := func(stmts ...string) {
@@ -223,16 +224,20 @@ func TestApplyPostgresUpsertOptions(t *testing.T) {
 		`INSERT INTO grades (label, company_id, permission) VALUES ('Custom', 'acme', '{}')`,
 		`UPDATE grades SET label = 'Edited' WHERE id = `+owner,
 		`UPDATE grades SET permission = '{"actions": []}' WHERE id = `+viewer,
+		`UPDATE grades SET updated_at = '2000-01-01T00:00:00Z'`,
 	)
 	applyMaster()
 
 	for q, want := range map[string]string{
 		// The label is written on insert only, so the renamed one stays.
 		`SELECT string_agg(label, ',' ORDER BY label) FROM grades`: "Custom,Edited,Viewer",
-		// The changed permission is restored.
-		`SELECT permission::text FROM grades WHERE id = ` + viewer: `{"actions": ["read"]}`,
-		// prune=false leaves the rows of the application.
-		`SELECT count(*)::text FROM grades WHERE company_id = 'acme'`: "1",
+		// The changed permission is restored, and every row of the master data is touched.
+		`SELECT permission::text FROM grades WHERE id = ` + viewer:                            `{"actions": ["read"]}`,
+		`SELECT (updated_at > '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + viewer: "true",
+		`SELECT (updated_at > '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + owner:  "true",
+		// prune=false leaves the rows of the application, untouched.
+		`SELECT count(*)::text FROM grades WHERE company_id = 'acme'`:                                      "1",
+		`SELECT bool_and(updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE company_id = 'acme'`: "true",
 	} {
 		if got := query[string](t, db, q); got != want {
 			t.Errorf("%s = %q, want %q", q, got, want)

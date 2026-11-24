@@ -38,6 +38,10 @@ type UpsertSpec struct {
 	Keys []string
 	// InsertOnly are the columns of Cols written by the insert only: the update leaves them alone.
 	InsertOnly []string
+	// Touch is a column, not in Cols, that the update sets to the current time, or empty.
+	// It is ignored when no column is updated (Updated is empty), since nothing is then updated:
+	// callers wanting the column to move must reject that case.
+	Touch string
 }
 
 // Updated returns the columns the update writes from the parameters: Cols without Keys and InsertOnly.
@@ -174,6 +178,9 @@ func (d postgres) Upsert(u UpsertSpec) string {
 	var sets []string
 	for _, c := range updated {
 		sets = append(sets, fmt.Sprintf("%s = EXCLUDED.%s", d.quote(c), d.quote(c)))
+	}
+	if u.Touch != "" {
+		sets = append(sets, d.quote(u.Touch)+" = CURRENT_TIMESTAMP")
 	}
 	return stmt + "DO UPDATE SET " + strings.Join(sets, ", ")
 }

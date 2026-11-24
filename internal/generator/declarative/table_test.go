@@ -89,7 +89,7 @@ func TestApplyMasterData(t *testing.T) {
 }
 
 func TestApplyUpsertOptions(t *testing.T) {
-	schema := "package data\n\n//datlas:master roles table=roles prune=false\ntype R struct {\n" +
+	schema := "package data\n\n//datlas:master roles table=roles prune=false touch=updated_at\ntype R struct {\n" +
 		"\tID string `yaml:\"id\" master:\"key\"`\n\tLabel string `yaml:\"label\" db:\",insertonly\"`\n\tName string `yaml:\"name\" db:\"role_name,insertonly\"`\n\tPerm []string `yaml:\"perm\"`\n}\n"
 	dir := testutil.WriteTree(t, map[string]string{"schema.go": schema, "roles.yaml": "- {id: a, label: A, name: n, perm: [x]}\n"})
 	path, err := run(MasterData, Config{Dir: dir, Package: "."})
@@ -98,7 +98,7 @@ func TestApplyUpsertOptions(t *testing.T) {
 	}
 	testutil.TypeCheck(t, dir, ".")
 	mustContain(t, testutil.ReadFile(t, path),
-		`INSERT INTO "roles" AS "datlas_target" ("id", "label", "role_name", "perm") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm"`,
+		`INSERT INTO "roles" AS "datlas_target" ("id", "label", "role_name", "perm") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP`,
 	)
 }
 
@@ -191,6 +191,18 @@ func TestTableErrors(t *testing.T) {
 			"schema.go":  "package data\n\ntype B struct {\n\tX string `yaml:\"x\"`\n}\n\n//datlas:master roles table=r\ntype R struct {\n\tB `yaml:\",inline\" db:\"b\"`\n\tCode string `yaml:\"code\" master:\"key\"`\n}\n",
 			"roles.yaml": "[]\n",
 		}, want: "R.B: an inline struct has no column of its own"},
+		{name: "touch without table", files: master("//datlas:master roles touch=updated_at", ""), want: "touch has no effect without table=<name>"},
+		{name: "prune and touch without table", files: master("//datlas:master roles prune=false touch=updated_at", ""), want: "prune, touch have no effect without table=<name>"},
+		{name: "empty touch", files: master("//datlas:master roles table=r touch=", ""), want: `unknown or repeated option "touch="`},
+		{name: "invalid touch", files: master("//datlas:master roles table=r touch=a-b", ""), want: `invalid touch column name "a-b"`},
+		{name: "upper-case touch", files: master("//datlas:master roles table=r touch=updatedAt", ""), want: `touch column name: "updatedAt" has upper-case letters`},
+		{name: "touch is a column", files: master("//datlas:master roles table=r touch=updated_at", "\tAt string `yaml:\"at\" db:\"updated_at\"`\n"), want: `R.At: column "updated_at" is the touch column`},
+		{name: "touch keyless seed", kind: SeedData, files: map[string]string{
+			"schema.go":         "package data\n\n//datlas:seed events table=events touch=updated_at\ntype E struct {\n\tA string\n}\n",
+			"local/events.yaml": "[]\n",
+		}, want: "touch=updated_at requires a logical key"},
+		{name: "touch with only insert-only columns", files: master("//datlas:master roles table=r touch=updated_at", "\tName string `yaml:\"name\" db:\",insertonly\"`\n"), want: "touch=updated_at has no effect: every column but the keys is insertonly or there is none"},
+		{name: "touch with only keys", files: master("//datlas:master roles table=r touch=updated_at", ""), want: "touch=updated_at has no effect"},
 		{name: "excluded key", files: map[string]string{
 			"schema.go":  "package data\n\n//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\" db:\"-\"`\n\tName string `yaml:\"name\"`\n}\n",
 			"roles.yaml": "[]\n",
@@ -268,4 +280,17 @@ func TestImportNamesUnchanged(t *testing.T) {
 	}
 	mustContain(t, testutil.ReadFile(t, path), `"example.com/datlastest/keys"`, `RoleCodeA keys.K = "a"`)
 	testutil.TypeCheck(t, filepath.Dir(path), ".")
+}
+
+// TestTouchKeyColumnError checks that a key field whose column is the touch column gets that error only,
+// not also the error of an excluded key.
+func TestTouchKeyColumnError(t *testing.T) {
+	_, err := generate(t, MasterData, map[string]string{
+		"schema.go":  "package data\n\n//datlas:master roles table=r touch=code\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n\tName string `yaml:\"name\"`\n}\n",
+		"roles.yaml": "[]\n",
+	})
+	mustFail(t, err, `R.Code: column "code" is the touch column`)
+	if strings.Contains(err.Error(), "cannot be excluded") {
+		t.Errorf("error also says the key is excluded: %v", err)
+	}
 }

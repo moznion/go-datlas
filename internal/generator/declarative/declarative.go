@@ -291,6 +291,10 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 				tblOpts.prune = !tblOpts.prune
 				seenOpt[k] = true
 				continue
+			case k == "touch" && v != "":
+				tblOpts.touch = v
+				seenOpt[k] = true
+				continue
 			}
 			available := "singular=<Name>, table=<name>"
 			if kind == MasterData {
@@ -298,6 +302,7 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 			} else {
 				available += ", prune=true"
 			}
+			available += ", touch=<column>"
 			errs = append(errs, fmt.Errorf("%s: //datlas:%s: unknown or repeated option %q (available: %s)", d.Pos, kind.directive(), opt, available))
 		}
 		if !validDatasetName(name) {
@@ -331,9 +336,21 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 				errs = append(errs, err)
 				continue
 			}
-		case seenOpt["prune"]:
-			errs = append(errs, fmt.Errorf("%s: //datlas:%s: prune has no effect without table=<name>", d.Pos, kind.directive()))
-			continue
+		default:
+			var orphan []string
+			for _, o := range []string{"prune", "touch"} {
+				if seenOpt[o] {
+					orphan = append(orphan, o)
+				}
+			}
+			if len(orphan) > 0 {
+				verb := "has"
+				if len(orphan) > 1 {
+					verb = "have"
+				}
+				errs = append(errs, fmt.Errorf("%s: //datlas:%s: %s %s no effect without table=<name>", d.Pos, kind.directive(), strings.Join(orphan, ", "), verb))
+				continue
+			}
 		}
 		result = append(result, namedSchema{name: name, singular: singular, noConsts: noConsts, table: tbl, directive: d, schema: schema})
 	}

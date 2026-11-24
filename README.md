@@ -421,10 +421,11 @@ err = tx.Commit()
 - Each record is upserted by its logical key (`INSERT ... ON CONFLICT (key) DO UPDATE`), so the key
   columns need a primary key or unique constraint. Records of seed data without a key are inserted,
   so applying them twice inserts them twice.
-- Updating rows: the update writes every column except the keys. Options of `db` tags narrow it:
+- Updating rows: the update writes every column except the keys. The options below change what it
+  writes:
 
   ```go
-  //datlas:master roles table=roles prune=false
+  //datlas:master roles table=roles prune=false touch=updated_at
   type RoleDefinition struct {
   	ID         string     `yaml:"id" master:"key"`
   	Label      string     `yaml:"label" db:",insertonly"` // written on insert only
@@ -434,7 +435,7 @@ err = tx.Commit()
 
   ```sql
   INSERT INTO "roles" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3)
-  ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission"
+  ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP
   ```
 
   - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
@@ -442,6 +443,18 @@ err = tx.Commit()
     Key fields cannot be insert-only, and the option needs a logical key, since records without one are
     only inserted. When every column but the keys is insert-only, existing rows are left alone
     (`DO NOTHING`).
+  - `touch=<column>` sets the column to the current time when a row is updated. The column is not a field
+    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`). Every application updates
+    every existing row, so the column moves each time: it tells when the data was last applied, not when
+    the values of the row changed. It needs a logical key, since records without one are only inserted,
+    and a column that is updated: when every column but the keys is insert-only, rows are never updated,
+    which is an error.
+    The value is `CURRENT_TIMESTAMP`, a `timestamptz` holding the start of the transaction. Applied
+    through a `*sql.Tx`, every row of one application gets the same time; through a `*sql.DB`, each
+    statement runs in a transaction of its own and gets its own time. Use a `timestamptz` column:
+    PostgreSQL converts the value to the types it has an assignment cast to, so a `timestamp` column
+    stores the local time of the session's `TimeZone` and `date`, `time` or `text` columns store a
+    converted value, while other types, such as `integer`, fail when the data is applied.
   - An empty `db` tag option is an error, including a trailing comma (`db:"name,"`), which is likely an
     option left out. Versions up to v0.1.0 accepted `db:"name,"` as the column name alone: drop the comma.
   - The statement aliases the table as `datlas_target`, so that a table named `excluded` does not clash

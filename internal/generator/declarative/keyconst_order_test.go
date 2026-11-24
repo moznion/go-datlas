@@ -80,7 +80,7 @@ func TestMasterKeyConstConflicts(t *testing.T) {
 			"schema.go":        "package data\n\n//datlas:seed users consts=false\ntype U struct {\n\tA string `seed:\"key\"`\n}\n",
 			"local/users.yaml": "[]\n",
 		})
-		mustFail(t, err, `unknown or repeated option "consts=false" (available: singular=<Name>, table=<name>, prune=true)`)
+		mustFail(t, err, `unknown or repeated option "consts=false" (available: singular=<Name>, table=<name>, prune=true, touch=<column>)`)
 	})
 }
 
