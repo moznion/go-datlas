@@ -87,14 +87,20 @@ func parseDBTag(tag string) (dbTag, error) {
 	if v == "-" {
 		return dbTag{skip: true}, nil
 	}
-	name, opts, _ := strings.Cut(v, ",")
+	name, opts, hasOpts := strings.Cut(v, ",")
 	t := dbTag{name: name}
-	if opts == "" {
+	if !hasOpts {
 		return t, nil
 	}
 	for _, o := range strings.Split(opts, ",") {
-		if o != dbTagInsertOnly || t.insertOnly {
-			return dbTag{}, fmt.Errorf("unknown or repeated %s tag option %q (available: %s)", DBTagKey, o, dbTagInsertOnly)
+		switch {
+		case o == "":
+			// A trailing or doubled comma is likely an option left out, e.g. `db:"label,"`.
+			return dbTag{}, fmt.Errorf("empty %s tag option in %q (available: %s)", DBTagKey, v, dbTagInsertOnly)
+		case o != dbTagInsertOnly:
+			return dbTag{}, fmt.Errorf("unknown %s tag option %q (available: %s)", DBTagKey, o, dbTagInsertOnly)
+		case t.insertOnly:
+			return dbTag{}, fmt.Errorf("repeated %s tag option %q", DBTagKey, o)
 		}
 		t.insertOnly = true
 	}
@@ -138,7 +144,11 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 			}
 			name := tag.name
 			if f.tag.inline {
-				if name != "" || tag.insertOnly {
+				if tag.insertOnly {
+					errs = append(errs, fmt.Errorf("%s: %s cannot be set on an inline struct, which has no column of its own; set it on its fields instead", fctx, dbTagInsertOnly))
+					continue
+				}
+				if name != "" {
 					errs = append(errs, fmt.Errorf("%s: an inline struct has no column of its own; tag its fields instead", fctx))
 					continue
 				}
@@ -164,6 +174,10 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 			col, err := columnOf(name, fpath, f.v, enums)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", fctx, err))
+				continue
+			}
+			if tag.insertOnly && len(schema.Keys) == 0 {
+				errs = append(errs, fmt.Errorf("%s: %s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", fctx, dbTagInsertOnly, kind.tagKey()))
 				continue
 			}
 			col.InsertOnly = tag.insertOnly

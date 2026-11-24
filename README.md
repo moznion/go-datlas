@@ -423,8 +423,9 @@ err = tx.Commit()
 
   - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
     the row is inserted and leaves it alone when the row is updated, e.g. a label users may rename.
-    Key fields cannot be insert-only. When every column but the keys is insert-only, existing rows are
-    left alone (`DO NOTHING`).
+    Key fields cannot be insert-only, and the option needs a logical key, since records without one are
+    only inserted. When every column but the keys is insert-only, existing rows are left alone
+    (`DO NOTHING`).
   - The keys are the `ON CONFLICT` target, which must match a unique constraint or index without a
     predicate: a partial unique index (`... WHERE company_id IS NULL`) is not matched.
 - **Prune**: after upserting, the rows whose keys are not in the data are deleted. Master data prunes
