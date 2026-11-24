@@ -220,7 +220,25 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	if len(t.Columns) == 0 && len(errs) == 0 {
 		errs = append(errs, fmt.Errorf("%s: table %s has no columns", ctx, table))
 	}
+	if opts.touch != "" && len(errs) == 0 && !t.updates() {
+		errs = append(errs, fmt.Errorf("%s: touch=%s has no effect: every column but the keys is %s or there is none, so existing rows are never updated", ctx, opts.touch, dbTagInsertOnly))
+	}
 	return t, errors.Join(errs...)
+}
+
+// updates reports whether the upsert of the table updates a column of existing rows:
+// a column that is neither a key nor insert-only.
+func (t *Table) updates() bool {
+	isKey := map[int]bool{}
+	for _, k := range t.Keys {
+		isKey[k] = true
+	}
+	for i, c := range t.Columns {
+		if !isKey[i] && !c.InsertOnly {
+			return true
+		}
+	}
+	return false
 }
 
 // columnOf decides how the values of a field of type t are passed to the database.

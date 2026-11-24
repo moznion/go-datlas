@@ -162,7 +162,8 @@ DROP TABLE IF EXISTS events, tags, grades;
 CREATE SCHEMA config;
 CREATE TABLE config.flags (name text PRIMARY KEY);
 CREATE TABLE grades (
-	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL
+	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL,
+	updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE events (kind text NOT NULL, payload jsonb NOT NULL);
 CREATE TABLE tags (name text PRIMARY KEY);
@@ -233,8 +234,9 @@ func TestApplyPostgresUpsertOptions(t *testing.T) {
 		`SELECT permission::text FROM grades WHERE id = ` + viewer:                            `{"actions": ["read"]}`,
 		`SELECT (updated_at > '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + viewer: "true",
 		`SELECT (updated_at > '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + owner:  "true",
-		// prune=false leaves the rows of the application.
-		`SELECT (updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE company_id = 'acme'`: "true",
+		// prune=false leaves the rows of the application, untouched.
+		`SELECT count(*)::text FROM grades WHERE company_id = 'acme'`:                                      "1",
+		`SELECT bool_and(updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE company_id = 'acme'`: "true",
 	} {
 		if got := query[string](t, db, q); got != want {
 			t.Errorf("%s = %q, want %q", q, got, want)
