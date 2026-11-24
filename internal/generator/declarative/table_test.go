@@ -192,6 +192,7 @@ func TestTableErrors(t *testing.T) {
 			"roles.yaml": "[]\n",
 		}, want: "R.B: an inline struct has no column of its own"},
 		{name: "touch without table", files: master("//datlas:master roles touch=updated_at", ""), want: "touch has no effect without table=<name>"},
+		{name: "prune and touch without table", files: master("//datlas:master roles prune=false touch=updated_at", ""), want: "prune, touch have no effect without table=<name>"},
 		{name: "empty touch", files: master("//datlas:master roles table=r touch=", ""), want: `unknown or repeated option "touch="`},
 		{name: "invalid touch", files: master("//datlas:master roles table=r touch=a-b", ""), want: `invalid touch column name "a-b"`},
 		{name: "upper-case touch", files: master("//datlas:master roles table=r touch=updatedAt", ""), want: `touch column name: "updatedAt" has upper-case letters`},
@@ -279,4 +280,17 @@ func TestImportNamesUnchanged(t *testing.T) {
 	}
 	mustContain(t, testutil.ReadFile(t, path), `"example.com/datlastest/keys"`, `RoleCodeA keys.K = "a"`)
 	testutil.TypeCheck(t, filepath.Dir(path), ".")
+}
+
+// TestTouchKeyColumnError checks that a key field whose column is the touch column gets that error only,
+// not also the error of an excluded key.
+func TestTouchKeyColumnError(t *testing.T) {
+	_, err := generate(t, MasterData, map[string]string{
+		"schema.go":  "package data\n\n//datlas:master roles table=r touch=code\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n\tName string `yaml:\"name\"`\n}\n",
+		"roles.yaml": "[]\n",
+	})
+	mustFail(t, err, `R.Code: column "code" is the touch column`)
+	if strings.Contains(err.Error(), "cannot be excluded") {
+		t.Errorf("error also says the key is excluded: %v", err)
+	}
 }

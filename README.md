@@ -429,9 +429,10 @@ err = tx.Commit()
     (`DO NOTHING`).
   - `touch=<column>` sets the column to the current time when a row is updated. The column is not a field
     of the schema: on insert it takes its default value (e.g. `DEFAULT now()`). Every application updates
-    every existing row, so the column moves each time. It needs a logical key, since records without one
-    are only inserted, and a column that is updated: when every column but the keys is insert-only,
-    rows are never updated, which is an error.
+    every existing row, so the column moves each time: it tells when the data was last applied, not when
+    the values of the row changed. It needs a logical key, since records without one are only inserted,
+    and a column that is updated: when every column but the keys is insert-only, rows are never updated,
+    which is an error.
     The value is `CURRENT_TIMESTAMP`, a `timestamptz` holding the start of the transaction. Applied
     through a `*sql.Tx`, every row of one application gets the same time; through a `*sql.DB`, each
     statement runs in a transaction of its own and gets its own time. Use a `timestamptz` column:
