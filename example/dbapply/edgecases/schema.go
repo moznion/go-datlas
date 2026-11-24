@@ -37,6 +37,14 @@ type Grade struct {
 	Permission GradePermission `yaml:"permission"`
 }
 
+// Setting is in a schema-qualified table, which the condition of skip_unchanged refers to.
+//
+//datlas:master settings table=config.settings skip_unchanged=true
+type Setting struct {
+	Name  string `yaml:"name" master:"key"`
+	Value string `yaml:"value"`
+}
+
 // GradePermission is written to a jsonb column.
 type GradePermission struct {
 	Actions []string `yaml:"actions" json:"actions"`

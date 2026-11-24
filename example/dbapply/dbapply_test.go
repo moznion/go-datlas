@@ -161,6 +161,7 @@ DROP SCHEMA IF EXISTS config CASCADE;
 DROP TABLE IF EXISTS events, tags, grades;
 CREATE SCHEMA config;
 CREATE TABLE config.flags (name text PRIMARY KEY);
+CREATE TABLE config.settings (name text PRIMARY KEY, value text NOT NULL);
 CREATE TABLE grades (
 	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL,
 	updated_at timestamptz NOT NULL DEFAULT now()
@@ -241,5 +242,28 @@ func TestApplyPostgresUpsertOptions(t *testing.T) {
 		if got := query[string](t, db, q); got != want {
 			t.Errorf("%s = %q, want %q", q, got, want)
 		}
+	}
+}
+
+// TestApplyPostgresSkipUnchangedQualified applies settings, in a schema-qualified table with skip_unchanged=true:
+// the changed row is restored, and the unchanged one is not rewritten (its xmin, the transaction that wrote it, stays).
+func TestApplyPostgresSkipUnchangedQualified(t *testing.T) {
+	db := openDB(t, edgeDDL)
+	if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE config.settings SET value = 'light' WHERE name = 'theme'`); err != nil {
+		t.Fatal(err)
+	}
+	const xmin = `SELECT xmin::text FROM config.settings WHERE name = 'locale'`
+	before := query[string](t, db, xmin)
+	if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if got := query[string](t, db, `SELECT value FROM config.settings WHERE name = 'theme'`); got != "dark" {
+		t.Errorf("theme = %q, want dark", got)
+	}
+	if after := query[string](t, db, xmin); after != before {
+		t.Errorf("the unchanged row was rewritten: xmin %s -> %s", before, after)
 	}
 }
