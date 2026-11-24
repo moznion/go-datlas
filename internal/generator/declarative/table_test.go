@@ -302,3 +302,13 @@ func TestTouchKeyColumnError(t *testing.T) {
 		t.Errorf("error also says the key is excluded: %v", err)
 	}
 }
+
+// TestKeylessOptionsErrors checks that a dataset without a key reports both touch and skip_unchanged at once.
+func TestKeylessOptionsErrors(t *testing.T) {
+	_, err := generate(t, SeedData, map[string]string{
+		"schema.go":         "package data\n\n//datlas:seed events table=events touch=updated_at skip_unchanged=true\ntype E struct {\n\tA string\n}\n",
+		"local/events.yaml": "[]\n",
+	})
+	mustFail(t, err, "touch=updated_at requires a logical key")
+	mustFail(t, err, "skip_unchanged=true requires a logical key")
+}

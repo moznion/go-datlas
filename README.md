@@ -443,11 +443,14 @@ err = tx.Commit()
   - `skip_unchanged=true` leaves the rows whose updated columns already hold the values of the record,
     so their touch column does not move and row-level update triggers do not fire for them (statement-level
     triggers and `BEFORE INSERT` row triggers still do). It compares the columns with `IS DISTINCT FROM`,
-    which needs an equality operator for their types: use `jsonb`, not `json`; `xml` and the geometric
-    types (`point`, `polygon`, ...) cannot be compared either. The comparison is the equality of the type,
-    not of the text written: `1.0` and `1.00` in a `numeric` column, `1` and `1.0` in a `jsonb` number, or
-    values differing only in case in a `citext` column or under a nondeterministic collation are equal,
-    so such a change of the record is not written. It needs a logical key, since records without one
+    which needs an equality operator for their types: use `jsonb`, not `json`; `xml`, `point` and
+    `polygon` fail too. The comparison is the equality of the type, not of the text written: `1.0` and
+    `1.00` in a `numeric` column, `1` and `1.0` in a `jsonb` number, or values differing only in case in
+    a `citext` column or under a nondeterministic collation are equal, so such a change of the record is
+    not written. Some types have an `=` that does not compare the values at all: `box` and `circle`
+    compare their areas and `path` its number of points, so a different shape counts as unchanged; do not
+    use `skip_unchanged` with them. The rows left alone are still locked until the end of the
+    transaction, as with `SELECT ... FOR UPDATE`, so writers to them wait for it. It needs a logical key, since records without one
     are only inserted, and a column that is updated, like `touch`.
   - An empty `db` tag option is an error, including a trailing comma (`db:"name,"`), which is likely an
     option left out. Versions up to v0.1.0 accepted `db:"name,"` as the column name alone: drop the comma.

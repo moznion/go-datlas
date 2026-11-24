@@ -134,11 +134,15 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 		return nil, fmt.Errorf("%s: prune=true requires a logical key (`%s:\"key\"`) to tell the records of the dataset", ctx, kind.tagKey())
 	}
 	if len(schema.Keys) == 0 {
+		var keyless []error
 		if opts.touch != "" {
-			return nil, fmt.Errorf("%s: touch=%s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, opts.touch, kind.tagKey())
+			keyless = append(keyless, fmt.Errorf("%s: touch=%s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, opts.touch, kind.tagKey()))
 		}
 		if opts.skipUnchanged {
-			return nil, fmt.Errorf("%s: skip_unchanged=true requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, kind.tagKey())
+			keyless = append(keyless, fmt.Errorf("%s: skip_unchanged=true requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, kind.tagKey()))
+		}
+		if len(keyless) > 0 {
+			return nil, errors.Join(keyless...)
 		}
 	}
 	if opts.touch != "" {
