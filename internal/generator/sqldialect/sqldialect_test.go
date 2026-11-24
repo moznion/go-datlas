@@ -32,8 +32,16 @@ func TestPostgres(t *testing.T) {
 		{d.SelectExcept("perms", []string{"role", "action"}, 2),
 			`SELECT CAST("role" AS text), CAST("action" AS text) FROM "perms" WHERE ("role", "action") NOT IN (($1, $2), ($3, $4)) ORDER BY "role", "action"`},
 		{d.Compare("roles", []string{"code"}, []string{"name", "perm"}),
-			`SELECT "name" IS DISTINCT FROM $2, "perm" IS DISTINCT FROM $3 FROM "roles" WHERE "code" = $1`},
-		{d.Compare("app.perms", []string{"role", "action"}, nil), `SELECT 1 FROM "app"."perms" WHERE "role" = $1 AND "action" = $2`},
+			`SELECT CAST("datlas_v"."code" AS text), "datlas_t"."code" IS NOT NULL, ` +
+				`CAST("datlas_t"."name" AS %[2]s) IS DISTINCT FROM "datlas_v"."name", CAST("datlas_t"."perm" AS %[3]s) IS DISTINCT FROM "datlas_v"."perm" ` +
+				`FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s), CAST($3 AS %[3]s))) AS "datlas_v" ("code", "name", "perm") ` +
+				`LEFT JOIN "roles" AS "datlas_t" ON "datlas_t"."code" = "datlas_v"."code"`},
+		{d.Compare("app.perms", []string{"role", "action"}, nil),
+			`SELECT CAST("datlas_v"."role" AS text), CAST("datlas_v"."action" AS text), "datlas_t"."role" IS NOT NULL ` +
+				`FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s))) AS "datlas_v" ("role", "action") ` +
+				`LEFT JOIN "app"."perms" AS "datlas_t" ON "datlas_t"."role" = "datlas_v"."role" AND "datlas_t"."action" = "datlas_v"."action"`},
+		{d.ColumnTypes("app.perms"), `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END ` +
+			`FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"app"."perms"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`},
 	}
 	for _, tt := range tests {
 		if tt.got != tt.want {

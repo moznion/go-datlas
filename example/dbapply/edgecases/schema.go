@@ -2,6 +2,8 @@
 // (an empty dataset, a schema-qualified table, records without a key); see ../dbapply_test.go.
 package edgecases
 
+import "time"
+
 //go:generate go tool datlas master -dir master
 //go:generate go tool datlas seed -dir seed
 
@@ -40,4 +42,15 @@ type Grade struct {
 // GradePermission is written to a jsonb column.
 type GradePermission struct {
 	Actions []string `yaml:"actions" json:"actions"`
+}
+
+// Note has columns the database converts the values of: a numeric(4,1) rounds the score and a
+// timestamptz(0) the time, while a json column has no equality operator. Diffing compares them as stored.
+//
+//datlas:master notes table=notes prune=false
+type Note struct {
+	ID    string            `yaml:"id" master:"key"`
+	Score float64           `yaml:"score"`
+	At    time.Time         `yaml:"at"`
+	Body  map[string]string `yaml:"body"`
 }

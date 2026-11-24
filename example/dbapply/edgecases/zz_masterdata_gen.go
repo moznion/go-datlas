@@ -5,10 +5,10 @@ package edgecases
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // MasterDatasets returns the names of the master data datasets in dependency order: every dataset comes
@@ -16,7 +16,7 @@ import (
 // Datasets without an order between them are in name order. Datasets referring to each other
 // in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
 func MasterDatasets() []string {
-	return []string{"flags", "grades"}
+	return []string{"flags", "grades", "notes"}
 }
 
 // Flags returns the master data "flags", compiled from flags.yaml.
@@ -82,6 +82,40 @@ func datlasMasterGrades1() Grade {
 	}
 }
 
+// Logical keys of Notes (ID).
+const (
+	NoteIDN1 string = "n1"
+)
+
+// Notes returns the master data "notes", compiled from notes.yaml.
+// Each call returns a new copy that the caller may modify freely.
+func Notes() []Note {
+	return []Note{
+		datlasMasterNotes0(),
+	}
+}
+
+// NoteByID returns the record of Notes whose ID equals the given value.
+// Each call returns a new copy.
+//
+//datlas:keys notes
+func NoteByID(key string) (Note, bool) {
+	switch key {
+	case "n1":
+		return datlasMasterNotes0(), true
+	}
+	return Note{}, false
+}
+
+func datlasMasterNotes0() Note {
+	return Note{
+		ID:    "n1",
+		Score: 1.25,
+		At:    time.Date(2024, time.January, 1, 0, 0, 0, 600000000, time.UTC),
+		Body:  map[string]string{"b": "x", "a": "y"},
+	}
+}
+
 // datlasMasterRowFlags returns the values of the columns of table config.flags for a record.
 func datlasMasterRowFlags(datlasRec Flag) ([]any, error) {
 	return []any{datlasRec.Name}, nil
@@ -117,26 +151,33 @@ func datlasMasterPruneFlags(ctx context.Context, db datlasMasterDB) error {
 	return nil
 }
 
-// datlasMasterDiffFlags reports what datlasMasterUpsertFlags does to the rows of table config.flags.
-func datlasMasterDiffFlags(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffUpsertFlags reports what datlasMasterUpsertFlags does to the rows of table config.flags.
+func datlasMasterdiffUpsertFlags(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Flags()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"config"."flags"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."name" AS text), "datlas_t"."name" IS NOT NULL FROM (VALUES (CAST($1 AS %[1]s))) AS "datlas_v" ("name") LEFT JOIN "config"."flags" AS "datlas_t" ON "datlas_t"."name" = "datlas_v"."name"`, "name")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff config.flags: master data "flags" from flags.yaml`, err)
+	}
 	var changes []MasterDataChange
-	for i, datlasRec := range Flags() {
+	for i, datlasRec := range records {
 		args, err := datlasMasterRowFlags(datlasRec)
 		change := MasterDataChange{Table: "config.flags", Dataset: "flags", Source: "flags.yaml", Record: i + 1}
 		if err == nil {
-			change.Key = []string{datlasMasterKeyText(args[0])}
-			change.Op, change.Columns, err = datlasMasterCompare(ctx, db, `SELECT 1 FROM "config"."flags" WHERE "name" = $1`, nil, args[0])
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 1, nil, args[0])
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff config.flags: master data "flags" from flags.yaml, record`, i+1, err)
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff config.flags: master data "flags" from flags.yaml`, i+1, err)
 		}
 		changes = append(changes, change)
 	}
 	return changes, nil
 }
 
-// datlasMasterDiffPruneFlags reports the rows of table config.flags that datlasMasterPruneFlags deletes.
-func datlasMasterDiffPruneFlags(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffPruneFlags reports the rows of table config.flags that datlasMasterPruneFlags deletes.
+func datlasMasterdiffPruneFlags(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
 	var keys []any
 	for i, datlasRec := range Flags() {
 		args, err := datlasMasterRowFlags(datlasRec)
@@ -145,7 +186,7 @@ func datlasMasterDiffPruneFlags(ctx context.Context, db datlasMasterQueryDB) ([]
 		}
 		keys = append(keys, args[0])
 	}
-	stale, err := datlasMasterStale(ctx, db, `SELECT CAST("name" AS text) FROM "config"."flags" ORDER BY "name"`, 1, keys...)
+	stale, err := datlasMasterdiffStale(ctx, db, `SELECT CAST("name" AS text) FROM "config"."flags" ORDER BY "name"`, 1, keys...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", `datlas: diff prune config.flags: master data "flags" from flags.yaml`, err)
 	}
@@ -179,18 +220,73 @@ func datlasMasterUpsertGrades(ctx context.Context, db datlasMasterDB) error {
 	return nil
 }
 
-// datlasMasterDiffGrades reports what datlasMasterUpsertGrades does to the rows of table grades.
-func datlasMasterDiffGrades(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffUpsertGrades reports what datlasMasterUpsertGrades does to the rows of table grades.
+func datlasMasterdiffUpsertGrades(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Grades()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"grades"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."id" AS text), "datlas_t"."id" IS NOT NULL, CAST("datlas_t"."permission" AS %[2]s) IS DISTINCT FROM "datlas_v"."permission" FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s))) AS "datlas_v" ("id", "permission") LEFT JOIN "grades" AS "datlas_t" ON "datlas_t"."id" = "datlas_v"."id"`, "id", "permission")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff grades: master data "grades" from grades.yaml`, err)
+	}
 	var changes []MasterDataChange
-	for i, datlasRec := range Grades() {
+	for i, datlasRec := range records {
 		args, err := datlasMasterRowGrades(datlasRec)
 		change := MasterDataChange{Table: "grades", Dataset: "grades", Source: "grades.yaml", Record: i + 1}
 		if err == nil {
-			change.Key = []string{datlasMasterKeyText(args[0])}
-			change.Op, change.Columns, err = datlasMasterCompare(ctx, db, `SELECT "permission" IS DISTINCT FROM $2 FROM "grades" WHERE "id" = $1`, []string{"permission"}, args[0], args[2])
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 1, []string{"permission"}, args[0], args[2])
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff grades: master data "grades" from grades.yaml, record`, i+1, err)
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff grades: master data "grades" from grades.yaml`, i+1, err)
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
+// datlasMasterRowNotes returns the values of the columns of table notes for a record.
+func datlasMasterRowNotes(datlasRec Note) ([]any, error) {
+	datlasCol3, err := json.Marshal(datlasRec.Body)
+	if err != nil {
+		return nil, fmt.Errorf("encode Body: %w", err)
+	}
+	return []any{datlasRec.ID, datlasRec.Score, datlasRec.At, string(datlasCol3)}, nil
+}
+
+// datlasMasterUpsertNotes applies the records of Notes to table notes.
+func datlasMasterUpsertNotes(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Notes() {
+		args, err := datlasMasterRowNotes(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "notes" ("id", "score", "at", "body") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "score" = EXCLUDED."score", "at" = EXCLUDED."at", "body" = EXCLUDED."body"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into notes: master data "notes" from notes.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterdiffUpsertNotes reports what datlasMasterUpsertNotes does to the rows of table notes.
+func datlasMasterdiffUpsertNotes(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Notes()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"notes"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."id" AS text), "datlas_t"."id" IS NOT NULL, CAST("datlas_t"."score" AS %[2]s) IS DISTINCT FROM "datlas_v"."score", CAST("datlas_t"."at" AS %[3]s) IS DISTINCT FROM "datlas_v"."at", CAST("datlas_t"."body" AS %[4]s) IS DISTINCT FROM "datlas_v"."body" FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s), CAST($3 AS %[3]s), CAST($4 AS %[4]s))) AS "datlas_v" ("id", "score", "at", "body") LEFT JOIN "notes" AS "datlas_t" ON "datlas_t"."id" = "datlas_v"."id"`, "id", "score", "at", "body")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff notes: master data "notes" from notes.yaml`, err)
+	}
+	var changes []MasterDataChange
+	for i, datlasRec := range records {
+		args, err := datlasMasterRowNotes(datlasRec)
+		change := MasterDataChange{Table: "notes", Dataset: "notes", Source: "notes.yaml", Record: i + 1}
+		if err == nil {
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 1, []string{"score", "at", "body"}, args[0], args[1], args[2], args[3])
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff notes: master data "notes" from notes.yaml`, i+1, err)
 		}
 		changes = append(changes, change)
 	}
@@ -212,6 +308,7 @@ func ApplyMasterData(ctx context.Context, db interface {
 	for _, step := range []func(context.Context, datlasMasterDB) error{
 		datlasMasterUpsertFlags,
 		datlasMasterUpsertGrades,
+		datlasMasterUpsertNotes,
 		datlasMasterPruneFlags,
 	} {
 		if err := step(ctx, db); err != nil {
@@ -279,64 +376,96 @@ func (c MasterDataChange) String() string {
 	return s
 }
 
-// datlasMasterQueryDB is the database DiffMasterData reads.
-type datlasMasterQueryDB = interface {
+// datlasMasterdiffDB is the database DiffMasterData reads.
+type datlasMasterdiffDB = interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// datlasMasterKeyText returns a value passed to the database as text, for the key of a change.
-func datlasMasterKeyText(v any) string {
-	dv, err := driver.DefaultParameterConverter.ConvertValue(v)
+// datlasMasterdiffQuery returns template, the query comparing the records of a table with its rows, taking the types
+// of the columns cols, which typesQuery selects with their names.
+func datlasMasterdiffQuery(ctx context.Context, db datlasMasterdiffDB, typesQuery, template string, cols ...string) (string, error) {
+	rows, err := db.QueryContext(ctx, typesQuery)
 	if err != nil {
-		return fmt.Sprint(v)
+		return "", err
 	}
-	switch dv := dv.(type) {
-	case nil:
-		return "NULL"
-	case []byte:
-		return string(dv)
+	defer rows.Close()
+	types := map[string]string{}
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			return "", err
+		}
+		types[name] = typ
 	}
-	return fmt.Sprint(dv)
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	slots := make([]any, len(cols))
+	for i, c := range cols {
+		typ, ok := types[c]
+		if !ok {
+			return "", fmt.Errorf("the table has no column %q", c)
+		}
+		slots[i] = typ
+	}
+	return fmt.Sprintf(template, slots...), nil
 }
 
-// datlasMasterCompare runs query, which selects whether each of cols is distinct from the value of a record
-// in the row having its keys, and returns what applying the record does to the row.
-func datlasMasterCompare(ctx context.Context, db datlasMasterQueryDB, query string, cols []string, args ...any) (MasterDataOp, []string, error) {
+// datlasMasterdiffCompare runs query, which compares a record having n keys with the row having its keys,
+// and returns the keys as text and what applying the record does to the row.
+func datlasMasterdiffCompare(ctx context.Context, db datlasMasterdiffDB, query string, n int, cols []string, args ...any) ([]string, MasterDataOp, []string, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, nil, err
+		return nil, 0, nil, err
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return MasterDataInsert, nil, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, 0, nil, err
+		}
+		return nil, 0, nil, fmt.Errorf("the comparing query selected no row")
 	}
-	var changed []string
-	if len(cols) > 0 {
-		distinct := make([]bool, len(cols))
-		dest := make([]any, len(cols))
-		for i := range distinct {
-			dest[i] = &distinct[i]
-		}
-		if err := rows.Scan(dest...); err != nil {
-			return 0, nil, err
-		}
-		for i, d := range distinct {
-			if d {
-				changed = append(changed, cols[i])
-			}
-		}
+	keys := make([]sql.NullString, n)
+	var exists bool
+	distinct := make([]bool, len(cols))
+	dest := []any{}
+	for i := range keys {
+		dest = append(dest, &keys[i])
+	}
+	dest = append(dest, &exists)
+	for i := range distinct {
+		dest = append(dest, &distinct[i])
+	}
+	if err := rows.Scan(dest...); err != nil {
+		return nil, 0, nil, err
 	}
 	if err := rows.Close(); err != nil {
-		return 0, nil, err
+		return nil, 0, nil, err
+	}
+	key := make([]string, n)
+	for i, k := range keys {
+		key[i] = "NULL"
+		if k.Valid {
+			key[i] = k.String
+		}
+	}
+	if !exists {
+		return key, MasterDataInsert, nil, nil
+	}
+	var changed []string
+	for i, d := range distinct {
+		if d {
+			changed = append(changed, cols[i])
+		}
 	}
 	if len(changed) == 0 {
-		return MasterDataUnchanged, nil, nil
+		return key, MasterDataUnchanged, nil, nil
 	}
-	return MasterDataUpdate, changed, nil
+	return key, MasterDataUpdate, changed, nil
 }
 
-// datlasMasterStale runs query, which selects the keys of n columns of the rows prune deletes, as text.
-func datlasMasterStale(ctx context.Context, db datlasMasterQueryDB, query string, n int, args ...any) ([][]string, error) {
+// datlasMasterdiffStale runs query, which selects the keys of n columns of the rows prune deletes, as text.
+func datlasMasterdiffStale(ctx context.Context, db datlasMasterdiffDB, query string, n int, args ...any) ([][]string, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -366,17 +495,19 @@ func datlasMasterStale(ctx context.Context, db datlasMasterQueryDB, query string
 
 // DiffMasterData reports, without writing anything, what ApplyMasterData does to the rows of the database db:
 // one change for every record, in the order ApplyMasterData applies them, then one for every row prune deletes.
-// A row is MasterDataUnchanged when the columns the update writes hold the values of the record, compared as
-// skip_unchanged=true compares them; without skip_unchanged=true, ApplyMasterData rewrites it all the same
-// (and sets its touch column). The rows may change between DiffMasterData and ApplyMasterData unless both run in
-// one transaction isolating them, e.g. at sql.LevelRepeatableRead.
+// The values of a record are converted to the types of the columns, as storing them does, and a row is
+// MasterDataUnchanged when the columns the update writes hold them already, compared as skip_unchanged=true
+// compares them (json columns as jsonb). Without skip_unchanged=true, ApplyMasterData rewrites such a row
+// all the same (and sets its touch column). The rows may change between DiffMasterData and ApplyMasterData unless
+// both run in one transaction isolating them, e.g. at sql.LevelRepeatableRead.
 func DiffMasterData(ctx context.Context, db interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }) ([]MasterDataChange, error) {
-	steps := []func(context.Context, datlasMasterQueryDB) ([]MasterDataChange, error){
-		datlasMasterDiffFlags,
-		datlasMasterDiffGrades,
-		datlasMasterDiffPruneFlags,
+	steps := []func(context.Context, datlasMasterdiffDB) ([]MasterDataChange, error){
+		datlasMasterdiffUpsertFlags,
+		datlasMasterdiffUpsertGrades,
+		datlasMasterdiffUpsertNotes,
+		datlasMasterdiffPruneFlags,
 	}
 	var changes []MasterDataChange
 	for _, step := range steps {

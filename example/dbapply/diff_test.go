@@ -131,6 +131,7 @@ func TestDiffPostgresEdgeCases(t *testing.T) {
 	want := []string{
 		"insert grades (" + owner + "): grades.yaml #1",
 		"insert grades (" + viewer + "): grades.yaml #2",
+		"insert notes (n1): notes.yaml #1",
 		// An empty dataset deletes every row, of a schema-qualified table too.
 		"delete config.flags (stale)",
 		// Records without a key are always inserted.
@@ -151,6 +152,8 @@ func TestDiffPostgresEdgeCases(t *testing.T) {
 		`UPDATE grades SET permission = '{"actions": []}' WHERE id = '` + viewer + `'`,
 		// Rows of the application are left alone, since grades does not prune.
 		`INSERT INTO grades (label, company_id, permission) VALUES ('Custom', 'acme', '{}')`,
+		// The json column is compared as jsonb: the order of the keys does not matter.
+		`UPDATE notes SET body = '{"b": "x", "a": "y"}'`,
 	} {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			t.Fatal(err)
@@ -167,6 +170,8 @@ func TestDiffPostgresEdgeCases(t *testing.T) {
 	want = []string{
 		"unchanged grades (" + owner + "): grades.yaml #1",
 		"update grades (" + viewer + "): grades.yaml #2: permission",
+		// The score and the time are compared once rounded as the columns store them.
+		"unchanged notes (n1): notes.yaml #1",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("changes:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -174,5 +179,16 @@ func TestDiffPostgresEdgeCases(t *testing.T) {
 	if c := mc[1]; c.Op != edgecases.MasterDataUpdate || c.Table != "grades" || c.Dataset != "grades" || c.Record != 2 ||
 		!slices.Equal(c.Key, []string{viewer}) || !slices.Equal(c.Columns, []string{"permission"}) {
 		t.Errorf("change: %+v", c)
+	}
+
+	if _, err := db.ExecContext(ctx, `UPDATE notes SET score = 1.2, body = '{"a": "z"}'`); err != nil {
+		t.Fatal(err)
+	}
+	mc, err = edgecases.DiffMasterData(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := mc[2].String(), "update notes (n1): notes.yaml #1: score, body"; got != want {
+		t.Errorf("change = %q, want %q", got, want)
 	}
 }

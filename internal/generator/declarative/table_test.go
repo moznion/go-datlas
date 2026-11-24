@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moznion/go-datlas/internal/generator/naming"
 	"github.com/moznion/go-datlas/internal/generator/testutil"
 )
 
@@ -135,6 +136,24 @@ func TestApplySeedData(t *testing.T) {
 		"INSERT INTO \"events\" (\"company\") VALUES ($1)`",
 		`DELETE FROM "companies" WHERE "key" NOT IN ($1, $2)`,
 	)
+}
+
+// TestDiffNames generates the diff of datasets whose names continue those of others: the functions
+// of prune_roles and of the prune of roles, or of a dataset index next to the index of a dataset diff_upsert.
+func TestDiffNames(t *testing.T) {
+	keyed := func(name string) string {
+		typ := naming.Camel(name) + "Def"
+		return "//datlas:master " + name + " table=" + name + "\ntype " + typ + " struct {\n\tK string `yaml:\"k\" master:\"key\"`\n\tV int `yaml:\"v\"`\n}\n\n"
+	}
+	files := map[string]string{"schema.go": "package data\n\n" + keyed("roles") + keyed("prune_roles") + keyed("index") + keyed("diff_upsert")}
+	for _, name := range []string{"roles", "prune_roles", "index", "diff_upsert"} {
+		files[name+".yaml"] = "- {k: a, v: 1}\n"
+	}
+	dir := testutil.WriteTree(t, files)
+	if _, err := run(MasterData, Config{Dir: dir, Package: "."}); err != nil {
+		t.Fatal(err)
+	}
+	testutil.TypeCheck(t, dir, ".")
 }
 
 func TestTableErrors(t *testing.T) {

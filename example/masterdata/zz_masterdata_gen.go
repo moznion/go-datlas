@@ -5,7 +5,6 @@ package masterdata
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -267,26 +266,33 @@ func datlasMasterPruneRoles(ctx context.Context, db datlasMasterDB) error {
 	return nil
 }
 
-// datlasMasterDiffRoles reports what datlasMasterUpsertRoles does to the rows of table roles.
-func datlasMasterDiffRoles(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffUpsertRoles reports what datlasMasterUpsertRoles does to the rows of table roles.
+func datlasMasterdiffUpsertRoles(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Roles()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"roles"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."code" AS text), "datlas_t"."code" IS NOT NULL, CAST("datlas_t"."name" AS %[2]s) IS DISTINCT FROM "datlas_v"."name" FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s))) AS "datlas_v" ("code", "name") LEFT JOIN "roles" AS "datlas_t" ON "datlas_t"."code" = "datlas_v"."code"`, "code", "name")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff roles: master data "roles" from roles.yaml`, err)
+	}
 	var changes []MasterDataChange
-	for i, datlasRec := range Roles() {
+	for i, datlasRec := range records {
 		args, err := datlasMasterRowRoles(datlasRec)
 		change := MasterDataChange{Table: "roles", Dataset: "roles", Source: "roles.yaml", Record: i + 1}
 		if err == nil {
-			change.Key = []string{datlasMasterKeyText(args[0])}
-			change.Op, change.Columns, err = datlasMasterCompare(ctx, db, `SELECT "name" IS DISTINCT FROM $2 FROM "roles" WHERE "code" = $1`, []string{"name"}, args[0], args[1])
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 1, []string{"name"}, args[0], args[1])
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff roles: master data "roles" from roles.yaml, record`, i+1, err)
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff roles: master data "roles" from roles.yaml`, i+1, err)
 		}
 		changes = append(changes, change)
 	}
 	return changes, nil
 }
 
-// datlasMasterDiffPruneRoles reports the rows of table roles that datlasMasterPruneRoles deletes.
-func datlasMasterDiffPruneRoles(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffPruneRoles reports the rows of table roles that datlasMasterPruneRoles deletes.
+func datlasMasterdiffPruneRoles(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
 	var keys []any
 	for i, datlasRec := range Roles() {
 		args, err := datlasMasterRowRoles(datlasRec)
@@ -295,7 +301,7 @@ func datlasMasterDiffPruneRoles(ctx context.Context, db datlasMasterQueryDB) ([]
 		}
 		keys = append(keys, args[0])
 	}
-	stale, err := datlasMasterStale(ctx, db, `SELECT CAST("code" AS text) FROM "roles" WHERE "code" NOT IN ($1, $2) ORDER BY "code"`, 1, keys...)
+	stale, err := datlasMasterdiffStale(ctx, db, `SELECT CAST("code" AS text) FROM "roles" WHERE "code" NOT IN ($1, $2) ORDER BY "code"`, 1, keys...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", `datlas: diff prune roles: master data "roles" from roles.yaml`, err)
 	}
@@ -341,26 +347,33 @@ func datlasMasterPrunePermissions(ctx context.Context, db datlasMasterDB) error 
 	return nil
 }
 
-// datlasMasterDiffPermissions reports what datlasMasterUpsertPermissions does to the rows of table permissions.
-func datlasMasterDiffPermissions(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffUpsertPermissions reports what datlasMasterUpsertPermissions does to the rows of table permissions.
+func datlasMasterdiffUpsertPermissions(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Permissions()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"permissions"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."role" AS text), CAST("datlas_v"."action" AS text), "datlas_t"."role" IS NOT NULL FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s))) AS "datlas_v" ("role", "action") LEFT JOIN "permissions" AS "datlas_t" ON "datlas_t"."role" = "datlas_v"."role" AND "datlas_t"."action" = "datlas_v"."action"`, "role", "action")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff permissions: master data "permissions" from permissions.yaml`, err)
+	}
 	var changes []MasterDataChange
-	for i, datlasRec := range Permissions() {
+	for i, datlasRec := range records {
 		args, err := datlasMasterRowPermissions(datlasRec)
 		change := MasterDataChange{Table: "permissions", Dataset: "permissions", Source: "permissions.yaml", Record: i + 1}
 		if err == nil {
-			change.Key = []string{datlasMasterKeyText(args[0]), datlasMasterKeyText(args[1])}
-			change.Op, change.Columns, err = datlasMasterCompare(ctx, db, `SELECT 1 FROM "permissions" WHERE "role" = $1 AND "action" = $2`, nil, args[0], args[1])
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 2, nil, args[0], args[1])
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff permissions: master data "permissions" from permissions.yaml, record`, i+1, err)
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff permissions: master data "permissions" from permissions.yaml`, i+1, err)
 		}
 		changes = append(changes, change)
 	}
 	return changes, nil
 }
 
-// datlasMasterDiffPrunePermissions reports the rows of table permissions that datlasMasterPrunePermissions deletes.
-func datlasMasterDiffPrunePermissions(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffPrunePermissions reports the rows of table permissions that datlasMasterPrunePermissions deletes.
+func datlasMasterdiffPrunePermissions(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
 	var keys []any
 	for i, datlasRec := range Permissions() {
 		args, err := datlasMasterRowPermissions(datlasRec)
@@ -369,7 +382,7 @@ func datlasMasterDiffPrunePermissions(ctx context.Context, db datlasMasterQueryD
 		}
 		keys = append(keys, args[0], args[1])
 	}
-	stale, err := datlasMasterStale(ctx, db, `SELECT CAST("role" AS text), CAST("action" AS text) FROM "permissions" WHERE ("role", "action") NOT IN (($1, $2), ($3, $4), ($5, $6)) ORDER BY "role", "action"`, 2, keys...)
+	stale, err := datlasMasterdiffStale(ctx, db, `SELECT CAST("role" AS text), CAST("action" AS text) FROM "permissions" WHERE ("role", "action") NOT IN (($1, $2), ($3, $4), ($5, $6)) ORDER BY "role", "action"`, 2, keys...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", `datlas: diff prune permissions: master data "permissions" from permissions.yaml`, err)
 	}
@@ -427,26 +440,33 @@ func datlasMasterPrunePlans(ctx context.Context, db datlasMasterDB) error {
 	return nil
 }
 
-// datlasMasterDiffPlans reports what datlasMasterUpsertPlans does to the rows of table plans.
-func datlasMasterDiffPlans(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffUpsertPlans reports what datlasMasterUpsertPlans does to the rows of table plans.
+func datlasMasterdiffUpsertPlans(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Plans()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"plans"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."code" AS text), "datlas_t"."code" IS NOT NULL, CAST("datlas_t"."name" AS %[2]s) IS DISTINCT FROM "datlas_v"."name", CAST("datlas_t"."tier" AS %[3]s) IS DISTINCT FROM "datlas_v"."tier", CAST("datlas_t"."price_yen" AS %[4]s) IS DISTINCT FROM "datlas_v"."price_yen", CAST("datlas_t"."trial" AS %[5]s) IS DISTINCT FROM "datlas_v"."trial", CAST("datlas_t"."features" AS %[6]s) IS DISTINCT FROM "datlas_v"."features", CAST("datlas_t"."regions" AS %[7]s) IS DISTINCT FROM "datlas_v"."regions", CAST("datlas_t"."description" AS %[8]s) IS DISTINCT FROM "datlas_v"."description", CAST("datlas_t"."limits" AS %[9]s) IS DISTINCT FROM "datlas_v"."limits" FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s), CAST($3 AS %[3]s), CAST($4 AS %[4]s), CAST($5 AS %[5]s), CAST($6 AS %[6]s), CAST($7 AS %[7]s), CAST($8 AS %[8]s), CAST($9 AS %[9]s))) AS "datlas_v" ("code", "name", "tier", "price_yen", "trial", "features", "regions", "description", "limits") LEFT JOIN "plans" AS "datlas_t" ON "datlas_t"."code" = "datlas_v"."code"`, "code", "name", "tier", "price_yen", "trial", "features", "regions", "description", "limits")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff plans: master data "plans" from plans.yaml`, err)
+	}
 	var changes []MasterDataChange
-	for i, datlasRec := range Plans() {
+	for i, datlasRec := range records {
 		args, err := datlasMasterRowPlans(datlasRec)
 		change := MasterDataChange{Table: "plans", Dataset: "plans", Source: "plans.yaml", Record: i + 1}
 		if err == nil {
-			change.Key = []string{datlasMasterKeyText(args[0])}
-			change.Op, change.Columns, err = datlasMasterCompare(ctx, db, `SELECT "name" IS DISTINCT FROM $2, "tier" IS DISTINCT FROM $3, "price_yen" IS DISTINCT FROM $4, "trial" IS DISTINCT FROM $5, "features" IS DISTINCT FROM $6, "regions" IS DISTINCT FROM $7, "description" IS DISTINCT FROM $8, "limits" IS DISTINCT FROM $9 FROM "plans" WHERE "code" = $1`, []string{"name", "tier", "price_yen", "trial", "features", "regions", "description", "limits"}, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8])
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 1, []string{"name", "tier", "price_yen", "trial", "features", "regions", "description", "limits"}, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8])
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff plans: master data "plans" from plans.yaml, record`, i+1, err)
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff plans: master data "plans" from plans.yaml`, i+1, err)
 		}
 		changes = append(changes, change)
 	}
 	return changes, nil
 }
 
-// datlasMasterDiffPrunePlans reports the rows of table plans that datlasMasterPrunePlans deletes.
-func datlasMasterDiffPrunePlans(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffPrunePlans reports the rows of table plans that datlasMasterPrunePlans deletes.
+func datlasMasterdiffPrunePlans(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
 	var keys []any
 	for i, datlasRec := range Plans() {
 		args, err := datlasMasterRowPlans(datlasRec)
@@ -455,7 +475,7 @@ func datlasMasterDiffPrunePlans(ctx context.Context, db datlasMasterQueryDB) ([]
 		}
 		keys = append(keys, args[0])
 	}
-	stale, err := datlasMasterStale(ctx, db, `SELECT CAST("code" AS text) FROM "plans" WHERE "code" NOT IN ($1, $2) ORDER BY "code"`, 1, keys...)
+	stale, err := datlasMasterdiffStale(ctx, db, `SELECT CAST("code" AS text) FROM "plans" WHERE "code" NOT IN ($1, $2) ORDER BY "code"`, 1, keys...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", `datlas: diff prune plans: master data "plans" from plans.yaml`, err)
 	}
@@ -505,26 +525,33 @@ func datlasMasterPruneRegions(ctx context.Context, db datlasMasterDB) error {
 	return nil
 }
 
-// datlasMasterDiffRegions reports what datlasMasterUpsertRegions does to the rows of table regions.
-func datlasMasterDiffRegions(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffUpsertRegions reports what datlasMasterUpsertRegions does to the rows of table regions.
+func datlasMasterdiffUpsertRegions(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Regions()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"regions"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."id" AS text), "datlas_t"."id" IS NOT NULL, CAST("datlas_t"."code" AS %[2]s) IS DISTINCT FROM "datlas_v"."code", CAST("datlas_t"."country" AS %[3]s) IS DISTINCT FROM "datlas_v"."country", CAST("datlas_t"."name" AS %[4]s) IS DISTINCT FROM "datlas_v"."name" FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s), CAST($3 AS %[3]s), CAST($4 AS %[4]s))) AS "datlas_v" ("id", "code", "country", "name") LEFT JOIN "regions" AS "datlas_t" ON "datlas_t"."id" = "datlas_v"."id"`, "id", "code", "country", "name")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff regions: master data "regions" from regions.yaml`, err)
+	}
 	var changes []MasterDataChange
-	for i, datlasRec := range Regions() {
+	for i, datlasRec := range records {
 		args, err := datlasMasterRowRegions(datlasRec)
 		change := MasterDataChange{Table: "regions", Dataset: "regions", Source: "regions.yaml", Record: i + 1}
 		if err == nil {
-			change.Key = []string{datlasMasterKeyText(args[0])}
-			change.Op, change.Columns, err = datlasMasterCompare(ctx, db, `SELECT "code" IS DISTINCT FROM $2, "country" IS DISTINCT FROM $3, "name" IS DISTINCT FROM $4 FROM "regions" WHERE "id" = $1`, []string{"code", "country", "name"}, args[0], args[1], args[2], args[3])
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 1, []string{"code", "country", "name"}, args[0], args[1], args[2], args[3])
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s #%d: %w", `datlas: diff regions: master data "regions" from regions.yaml, record`, i+1, err)
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff regions: master data "regions" from regions.yaml`, i+1, err)
 		}
 		changes = append(changes, change)
 	}
 	return changes, nil
 }
 
-// datlasMasterDiffPruneRegions reports the rows of table regions that datlasMasterPruneRegions deletes.
-func datlasMasterDiffPruneRegions(ctx context.Context, db datlasMasterQueryDB) ([]MasterDataChange, error) {
+// datlasMasterdiffPruneRegions reports the rows of table regions that datlasMasterPruneRegions deletes.
+func datlasMasterdiffPruneRegions(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
 	var keys []any
 	for i, datlasRec := range Regions() {
 		args, err := datlasMasterRowRegions(datlasRec)
@@ -533,7 +560,7 @@ func datlasMasterDiffPruneRegions(ctx context.Context, db datlasMasterQueryDB) (
 		}
 		keys = append(keys, args[0])
 	}
-	stale, err := datlasMasterStale(ctx, db, `SELECT CAST("id" AS text) FROM "regions" WHERE "id" NOT IN ($1, $2, $3) ORDER BY "id"`, 1, keys...)
+	stale, err := datlasMasterdiffStale(ctx, db, `SELECT CAST("id" AS text) FROM "regions" WHERE "id" NOT IN ($1, $2, $3) ORDER BY "id"`, 1, keys...)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", `datlas: diff prune regions: master data "regions" from regions.yaml`, err)
 	}
@@ -631,64 +658,96 @@ func (c MasterDataChange) String() string {
 	return s
 }
 
-// datlasMasterQueryDB is the database DiffMasterData reads.
-type datlasMasterQueryDB = interface {
+// datlasMasterdiffDB is the database DiffMasterData reads.
+type datlasMasterdiffDB = interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// datlasMasterKeyText returns a value passed to the database as text, for the key of a change.
-func datlasMasterKeyText(v any) string {
-	dv, err := driver.DefaultParameterConverter.ConvertValue(v)
+// datlasMasterdiffQuery returns template, the query comparing the records of a table with its rows, taking the types
+// of the columns cols, which typesQuery selects with their names.
+func datlasMasterdiffQuery(ctx context.Context, db datlasMasterdiffDB, typesQuery, template string, cols ...string) (string, error) {
+	rows, err := db.QueryContext(ctx, typesQuery)
 	if err != nil {
-		return fmt.Sprint(v)
+		return "", err
 	}
-	switch dv := dv.(type) {
-	case nil:
-		return "NULL"
-	case []byte:
-		return string(dv)
+	defer rows.Close()
+	types := map[string]string{}
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			return "", err
+		}
+		types[name] = typ
 	}
-	return fmt.Sprint(dv)
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	slots := make([]any, len(cols))
+	for i, c := range cols {
+		typ, ok := types[c]
+		if !ok {
+			return "", fmt.Errorf("the table has no column %q", c)
+		}
+		slots[i] = typ
+	}
+	return fmt.Sprintf(template, slots...), nil
 }
 
-// datlasMasterCompare runs query, which selects whether each of cols is distinct from the value of a record
-// in the row having its keys, and returns what applying the record does to the row.
-func datlasMasterCompare(ctx context.Context, db datlasMasterQueryDB, query string, cols []string, args ...any) (MasterDataOp, []string, error) {
+// datlasMasterdiffCompare runs query, which compares a record having n keys with the row having its keys,
+// and returns the keys as text and what applying the record does to the row.
+func datlasMasterdiffCompare(ctx context.Context, db datlasMasterdiffDB, query string, n int, cols []string, args ...any) ([]string, MasterDataOp, []string, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return 0, nil, err
+		return nil, 0, nil, err
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return MasterDataInsert, nil, rows.Err()
+		if err := rows.Err(); err != nil {
+			return nil, 0, nil, err
+		}
+		return nil, 0, nil, fmt.Errorf("the comparing query selected no row")
 	}
-	var changed []string
-	if len(cols) > 0 {
-		distinct := make([]bool, len(cols))
-		dest := make([]any, len(cols))
-		for i := range distinct {
-			dest[i] = &distinct[i]
-		}
-		if err := rows.Scan(dest...); err != nil {
-			return 0, nil, err
-		}
-		for i, d := range distinct {
-			if d {
-				changed = append(changed, cols[i])
-			}
-		}
+	keys := make([]sql.NullString, n)
+	var exists bool
+	distinct := make([]bool, len(cols))
+	dest := []any{}
+	for i := range keys {
+		dest = append(dest, &keys[i])
+	}
+	dest = append(dest, &exists)
+	for i := range distinct {
+		dest = append(dest, &distinct[i])
+	}
+	if err := rows.Scan(dest...); err != nil {
+		return nil, 0, nil, err
 	}
 	if err := rows.Close(); err != nil {
-		return 0, nil, err
+		return nil, 0, nil, err
+	}
+	key := make([]string, n)
+	for i, k := range keys {
+		key[i] = "NULL"
+		if k.Valid {
+			key[i] = k.String
+		}
+	}
+	if !exists {
+		return key, MasterDataInsert, nil, nil
+	}
+	var changed []string
+	for i, d := range distinct {
+		if d {
+			changed = append(changed, cols[i])
+		}
 	}
 	if len(changed) == 0 {
-		return MasterDataUnchanged, nil, nil
+		return key, MasterDataUnchanged, nil, nil
 	}
-	return MasterDataUpdate, changed, nil
+	return key, MasterDataUpdate, changed, nil
 }
 
-// datlasMasterStale runs query, which selects the keys of n columns of the rows prune deletes, as text.
-func datlasMasterStale(ctx context.Context, db datlasMasterQueryDB, query string, n int, args ...any) ([][]string, error) {
+// datlasMasterdiffStale runs query, which selects the keys of n columns of the rows prune deletes, as text.
+func datlasMasterdiffStale(ctx context.Context, db datlasMasterdiffDB, query string, n int, args ...any) ([][]string, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -718,22 +777,23 @@ func datlasMasterStale(ctx context.Context, db datlasMasterQueryDB, query string
 
 // DiffMasterData reports, without writing anything, what ApplyMasterData does to the rows of the database db:
 // one change for every record, in the order ApplyMasterData applies them, then one for every row prune deletes.
-// A row is MasterDataUnchanged when the columns the update writes hold the values of the record, compared as
-// skip_unchanged=true compares them; without skip_unchanged=true, ApplyMasterData rewrites it all the same
-// (and sets its touch column). The rows may change between DiffMasterData and ApplyMasterData unless both run in
-// one transaction isolating them, e.g. at sql.LevelRepeatableRead.
+// The values of a record are converted to the types of the columns, as storing them does, and a row is
+// MasterDataUnchanged when the columns the update writes hold them already, compared as skip_unchanged=true
+// compares them (json columns as jsonb). Without skip_unchanged=true, ApplyMasterData rewrites such a row
+// all the same (and sets its touch column). The rows may change between DiffMasterData and ApplyMasterData unless
+// both run in one transaction isolating them, e.g. at sql.LevelRepeatableRead.
 func DiffMasterData(ctx context.Context, db interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }) ([]MasterDataChange, error) {
-	steps := []func(context.Context, datlasMasterQueryDB) ([]MasterDataChange, error){
-		datlasMasterDiffRegions,
-		datlasMasterDiffPlans,
-		datlasMasterDiffRoles,
-		datlasMasterDiffPermissions,
-		datlasMasterDiffPrunePermissions,
-		datlasMasterDiffPruneRoles,
-		datlasMasterDiffPrunePlans,
-		datlasMasterDiffPruneRegions,
+	steps := []func(context.Context, datlasMasterdiffDB) ([]MasterDataChange, error){
+		datlasMasterdiffUpsertRegions,
+		datlasMasterdiffUpsertPlans,
+		datlasMasterdiffUpsertRoles,
+		datlasMasterdiffUpsertPermissions,
+		datlasMasterdiffPrunePermissions,
+		datlasMasterdiffPruneRoles,
+		datlasMasterdiffPrunePlans,
+		datlasMasterdiffPruneRegions,
 	}
 	var changes []MasterDataChange
 	for _, step := range steps {

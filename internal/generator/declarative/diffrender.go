@@ -37,7 +37,7 @@ func (r *sqlRenderer) renderDiff(envs []string, steps func(env, upsert, prune st
 	b, p, kind := r.b, r.kind.prefix(), r.kind
 	fn, change, op, ops := kind.diffNames()
 	apply := kind.applyName()
-	driverPkg, stringsPkg := r.im.Add("database/sql/driver", "driver"), r.im.Add("strings", "strings")
+	stringsPkg := r.im.Add("strings", "strings")
 	queryIface := fmt.Sprintf("interface {\nQueryContext(ctx %s.Context, query string, args ...any) (*%s.Rows, error)\n}", r.ctxPkg, r.sqlPkg)
 
 	fmt.Fprintf(b, `
@@ -99,62 +99,94 @@ s += ": " + %[11]s.Join(c.Columns, ", ")
 return s
 }
 
-// %[12]sQueryDB is the database %[10]s reads.
-type %[12]sQueryDB = %[13]s
+// %[12]sDB is the database %[10]s reads.
+type %[12]sDB = %[13]s
 
-// %[12]sKeyText returns a value passed to the database as text, for the key of a change.
-func %[12]sKeyText(v any) string {
-dv, err := %[14]s.DefaultParameterConverter.ConvertValue(v)
+// %[12]sQuery returns template, the query comparing the records of a table with its rows, taking the types
+// of the columns cols, which typesQuery selects with their names.
+func %[12]sQuery(ctx %[15]s.Context, db %[12]sDB, typesQuery, template string, cols ...string) (string, error) {
+rows, err := db.QueryContext(ctx, typesQuery)
 if err != nil {
-return %[8]s.Sprint(v)
+return "", err
 }
-switch dv := dv.(type) {
-case nil:
-return "NULL"
-case []byte:
-return string(dv)
+defer rows.Close()
+types := map[string]string{}
+for rows.Next() {
+var name, typ string
+if err := rows.Scan(&name, &typ); err != nil {
+return "", err
 }
-return %[8]s.Sprint(dv)
+types[name] = typ
+}
+if err := rows.Err(); err != nil {
+return "", err
+}
+slots := make([]any, len(cols))
+for i, c := range cols {
+typ, ok := types[c]
+if !ok {
+return "", %[8]s.Errorf("the table has no column %%q", c)
+}
+slots[i] = typ
+}
+return %[8]s.Sprintf(template, slots...), nil
 }
 
-// %[12]sCompare runs query, which selects whether each of cols is distinct from the value of a record
-// in the row having its keys, and returns what applying the record does to the row.
-func %[12]sCompare(ctx %[15]s.Context, db %[12]sQueryDB, query string, cols []string, args ...any) (%[1]s, []string, error) {
+// %[12]sCompare runs query, which compares a record having n keys with the row having its keys,
+// and returns the keys as text and what applying the record does to the row.
+func %[12]sCompare(ctx %[15]s.Context, db %[12]sDB, query string, n int, cols []string, args ...any) ([]string, %[1]s, []string, error) {
 rows, err := db.QueryContext(ctx, query, args...)
 if err != nil {
-return 0, nil, err
+return nil, 0, nil, err
 }
 defer rows.Close()
 if !rows.Next() {
-return %[3]s, nil, rows.Err()
+if err := rows.Err(); err != nil {
+return nil, 0, nil, err
 }
-var changed []string
-if len(cols) > 0 {
+return nil, 0, nil, %[8]s.Errorf("the comparing query selected no row")
+}
+keys := make([]%[16]s.NullString, n)
+var exists bool
 distinct := make([]bool, len(cols))
-dest := make([]any, len(cols))
+dest := []any{}
+for i := range keys {
+dest = append(dest, &keys[i])
+}
+dest = append(dest, &exists)
 for i := range distinct {
-dest[i] = &distinct[i]
+dest = append(dest, &distinct[i])
 }
 if err := rows.Scan(dest...); err != nil {
-return 0, nil, err
+return nil, 0, nil, err
 }
+if err := rows.Close(); err != nil {
+return nil, 0, nil, err
+}
+key := make([]string, n)
+for i, k := range keys {
+key[i] = "NULL"
+if k.Valid {
+key[i] = k.String
+}
+}
+if !exists {
+return key, %[3]s, nil, nil
+}
+var changed []string
 for i, d := range distinct {
 if d {
 changed = append(changed, cols[i])
 }
 }
-}
-if err := rows.Close(); err != nil {
-return 0, nil, err
-}
 if len(changed) == 0 {
-return %[5]s, nil, nil
+return key, %[5]s, nil, nil
 }
-return %[4]s, changed, nil
+return key, %[4]s, changed, nil
 }
 
 // %[12]sStale runs query, which selects the keys of n columns of the rows prune deletes, as text.
-func %[12]sStale(ctx %[15]s.Context, db %[12]sQueryDB, query string, n int, args ...any) ([][]string, error) {
+func %[12]sStale(ctx %[15]s.Context, db %[12]sDB, query string, n int, args ...any) ([][]string, error) {
 rows, err := db.QueryContext(ctx, query, args...)
 if err != nil {
 return nil, err
@@ -181,9 +213,9 @@ keys = append(keys, key)
 }
 return keys, rows.Err()
 }
-`, op, apply, ops[0], ops[1], ops[2], ops[3], kind, r.fmtPkg, change, fn, stringsPkg, p, queryIface, driverPkg, r.ctxPkg, r.sqlPkg)
+`, op, apply, ops[0], ops[1], ops[2], ops[3], kind, r.fmtPkg, change, fn, stringsPkg, p+"diff", queryIface, "", r.ctxPkg, r.sqlPkg)
 
-	stepType := fmt.Sprintf("[]func(%s.Context, %sQueryDB) ([]%s, error)", r.ctxPkg, p, change)
+	stepType := fmt.Sprintf("[]func(%s.Context, %sdiffDB) ([]%s, error)", r.ctxPkg, p, change)
 	renderSteps := func(fns []string) {
 		b.WriteString(stepType + "{\n")
 		for _, fn := range fns {
@@ -195,21 +227,22 @@ return keys, rows.Err()
 	doc := fmt.Sprintf(`
 // %[1]s reports, without writing anything, what %[2]s does to the rows of the database db:
 // one change for every record, in the order %[2]s applies them, then one for every row prune deletes.
-// A row is %[3]s when the columns the update writes hold the values of the record, compared as
-// skip_unchanged=true compares them; without skip_unchanged=true, %[2]s rewrites it all the same
-// (and sets its touch column). The rows may change between %[1]s and %[2]s unless both run in
-// one transaction isolating them, e.g. at sql.LevelRepeatableRead.
+// The values of a record are converted to the types of the columns, as storing them does, and a row is
+// %[3]s when the columns the update writes hold them already, compared as skip_unchanged=true
+// compares them (json columns as jsonb). Without skip_unchanged=true, %[2]s rewrites such a row
+// all the same (and sets its touch column). The rows may change between %[1]s and %[2]s unless
+// both run in one transaction isolating them, e.g. at sql.LevelRepeatableRead.
 `, fn, apply, ops[2])
 	if kind == MasterData {
 		fmt.Fprintf(b, "%sfunc %s(ctx %s.Context, db %s) ([]%s, error) {\nsteps := ", doc, fn, r.ctxPkg, queryIface, change)
-		renderSteps(steps("", "Diff", "DiffPrune"))
+		renderSteps(steps("", "diffUpsert", "diffPrune"))
 		fmt.Fprintf(b, "\n"+run, change)
 		return
 	}
 	fmt.Fprintf(b, "%sfunc %s(ctx %s.Context, db %s, env string) ([]%s, error) {\nvar steps %s\nswitch env {\n", doc, fn, r.ctxPkg, queryIface, change, stepType)
 	for _, env := range envs {
 		fmt.Fprintf(b, "case %q:\nsteps = ", env)
-		renderSteps(steps(env, "Diff", "DiffPrune"))
+		renderSteps(steps(env, "diffUpsert", "diffPrune"))
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(b, "default:\nreturn nil, %s.Errorf(\"datlas: no seed data for environment %%q\", env)\n}\n", r.fmtPkg)
@@ -217,9 +250,12 @@ return keys, rows.Err()
 }
 
 // renderDatasetDiff renders the functions reporting what applying the dataset does to its table,
-// for the dataset renderDataset rendered the statements of.
+// for the dataset renderDataset rendered the statements of. Their names start with the prefix and
+// "diff": the names derived from datasets continue the prefix with an upper-case letter, so they never
+// collide with them.
 func (r *sqlRenderer) renderDatasetDiff(ds *Dataset) {
 	b, p, t := r.b, r.kind.prefix(), ds.Table
+	h := p + "diff"
 	_, change, _, ops := r.kind.diffNames()
 	row := p + "Row" + naming.Camel(ds.Name)
 	what := fmt.Sprintf("%s %q", r.kind, ds.Name)
@@ -229,52 +265,67 @@ func (r *sqlRenderer) renderDatasetDiff(ds *Dataset) {
 	what += " from " + ds.source()
 	base := fmt.Sprintf("Table: %q, Dataset: %q, Source: %q", t.Name, ds.Name, ds.source())
 
-	fmt.Fprintf(b, "\n// %[1]sDiff%[2]s reports what %[1]sUpsert%[2]s does to the rows of table %[3]s.\nfunc %[1]sDiff%[2]s(ctx %[4]s.Context, db %[1]sQueryDB) ([]%[5]s, error) {\nvar changes []%[5]s\nfor i, datlasRec := range %[2]s() {\n",
-		p, ds.FuncName, t.Name, r.ctxPkg, change)
-	fail := fmt.Sprintf("return nil, %s.Errorf(\"%%s #%%d: %%w\", %s, i+1, err)", r.fmtPkg, goString("datlas: diff "+t.Name+": "+what+", record"))
+	fmt.Fprintf(b, "\n// %[1]sUpsert%[2]s reports what %[3]sUpsert%[2]s does to the rows of table %[4]s.\nfunc %[1]sUpsert%[2]s(ctx %[5]s.Context, db %[1]sDB) ([]%[6]s, error) {\n",
+		h, ds.FuncName, p, t.Name, r.ctxPkg, change)
+	label := goString("datlas: diff " + t.Name + ": " + what)
 	if len(t.Keys) == 0 {
 		// Records without a logical key are always inserted; encoding them still fails as applying them does.
-		fmt.Fprintf(b, "if _, err := %s(datlasRec); err != nil {\n%s\n}\nchanges = append(changes, %s{Op: %s, %s, Record: i + 1})\n}\nreturn changes, nil\n}\n",
-			row, fail, change, ops[0], base)
+		fmt.Fprintf(b, `var changes []%[1]s
+for i, datlasRec := range %[2]s() {
+if _, err := %[3]s(datlasRec); err != nil {
+return nil, %[4]s.Errorf("%%s, record #%%d: %%w", %[5]s, i+1, err)
+}
+changes = append(changes, %[1]s{Op: %[6]s, %[7]s, Record: i + 1})
+}
+return changes, nil
+}
+`, change, ds.FuncName, row, r.fmtPkg, label, ops[0], base)
 	} else {
 		isKey := map[int]bool{}
-		var keys, picks, cols []string
+		var keys, cols, picks, quoted []string
 		for _, k := range t.Keys {
 			isKey[k] = true
 			keys = append(keys, t.Columns[k].Name)
 			picks = append(picks, "args["+strconv.Itoa(k)+"]")
 		}
-		keyText := make([]string, len(picks))
-		for i, a := range picks {
-			keyText[i] = p + "KeyText(" + a + ")"
-		}
 		// The compared columns are those the update writes: neither keys nor insert-only columns.
-		var quoted []string
 		for i, c := range t.Columns {
 			if !isKey[i] && !c.InsertOnly {
 				cols = append(cols, c.Name)
-				quoted = append(quoted, strconv.Quote(c.Name))
 				picks = append(picks, "args["+strconv.Itoa(i)+"]")
 			}
 		}
+		for _, c := range append(append([]string(nil), keys...), cols...) {
+			quoted = append(quoted, strconv.Quote(c))
+		}
 		colsArg := "nil"
 		if len(cols) > 0 {
-			colsArg = "[]string{" + strings.Join(quoted, ", ") + "}"
+			colsArg = "[]string{" + strings.Join(quoted[len(keys):], ", ") + "}"
 		}
-		fmt.Fprintf(b, `args, err := %[1]s(datlasRec)
-change := %[2]s{%[3]s, Record: i + 1}
+		fmt.Fprintf(b, `records := %[1]s()
+if len(records) == 0 {
+return nil, nil
+}
+query, err := %[2]sQuery(ctx, db, %[3]s, %[4]s, %[5]s)
+if err != nil {
+return nil, %[6]s.Errorf("%%s: %%w", %[7]s, err)
+}
+var changes []%[8]s
+for i, datlasRec := range records {
+args, err := %[9]s(datlasRec)
+change := %[8]s{%[10]s, Record: i + 1}
 if err == nil {
-change.Key = []string{%[4]s}
-change.Op, change.Columns, err = %[5]sCompare(ctx, db, %[6]s, %[7]s, %[8]s)
+change.Key, change.Op, change.Columns, err = %[2]sCompare(ctx, db, query, %[11]d, %[12]s, %[13]s)
 }
 if err != nil {
-%[9]s
+return nil, %[6]s.Errorf("%%s, record #%%d: %%w", %[7]s, i+1, err)
 }
 changes = append(changes, change)
 }
 return changes, nil
 }
-`, row, change, base, strings.Join(keyText, ", "), p, goString(r.dialect.Compare(t.Name, keys, cols)), colsArg, strings.Join(picks, ", "), fail)
+`, ds.FuncName, h, goString(r.dialect.ColumnTypes(t.Name)), goString(r.dialect.Compare(t.Name, keys, cols)), strings.Join(quoted, ", "),
+			r.fmtPkg, label, change, row, base, len(keys), colsArg, strings.Join(picks, ", "))
 	}
 	if !r.prunes(ds) {
 		return
@@ -285,10 +336,10 @@ return changes, nil
 		picks = append(picks, "args["+strconv.Itoa(k)+"]")
 		keys = append(keys, t.Columns[k].Name)
 	}
-	label := goString("datlas: diff prune " + t.Name + ": " + what)
+	label = goString("datlas: diff prune " + t.Name + ": " + what)
 	fmt.Fprintf(b, `
-// %[1]sDiffPrune%[2]s reports the rows of table %[3]s that %[1]sPrune%[2]s deletes.
-func %[1]sDiffPrune%[2]s(ctx %[4]s.Context, db %[1]sQueryDB) ([]%[5]s, error) {
+// %[1]sPrune%[2]s reports the rows of table %[3]s that %[14]sPrune%[2]s deletes.
+func %[1]sPrune%[2]s(ctx %[4]s.Context, db %[1]sDB) ([]%[5]s, error) {
 var keys []any
 for i, datlasRec := range %[2]s() {
 args, err := %[6]s(datlasRec)
@@ -307,6 +358,6 @@ changes = append(changes, %[5]s{Op: %[12]s, %[13]s, Key: key})
 }
 return changes, nil
 }
-`, p, ds.FuncName, t.Name, r.ctxPkg, change, row, r.fmtPkg, label, strings.Join(picks, ", "),
-		goString(r.dialect.SelectExcept(t.Name, keys, len(ds.Records))), len(keys), ops[3], base)
+`, h, ds.FuncName, t.Name, r.ctxPkg, change, row, r.fmtPkg, label, strings.Join(picks, ", "),
+		goString(r.dialect.SelectExcept(t.Name, keys, len(ds.Records))), len(keys), ops[3], base, p)
 }

@@ -158,7 +158,7 @@ func TestApplyPostgres(t *testing.T) {
 
 const edgeDDL = `
 DROP SCHEMA IF EXISTS config CASCADE;
-DROP TABLE IF EXISTS events, tags, grades;
+DROP TABLE IF EXISTS events, tags, grades, notes;
 CREATE SCHEMA config;
 CREATE TABLE config.flags (name text PRIMARY KEY);
 CREATE TABLE grades (
@@ -167,6 +167,7 @@ CREATE TABLE grades (
 );
 CREATE TABLE events (kind text NOT NULL, payload jsonb NOT NULL);
 CREATE TABLE tags (name text PRIMARY KEY);
+CREATE TABLE notes (id text PRIMARY KEY, score numeric(4,1) NOT NULL, at timestamptz(0) NOT NULL, body json NOT NULL);
 INSERT INTO config.flags VALUES ('stale');
 INSERT INTO tags VALUES ('stale');
 `

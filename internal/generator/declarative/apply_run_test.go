@@ -218,23 +218,12 @@ func (q *queryer) QueryContext(_ context.Context, query string, args ...any) (*s
 func TestDiffErrors(t *testing.T) {
 	var q queryer
 	_, err := data.DiffMasterData(context.Background(), &q)
-	const want = "datlas: diff items: master data \"items\" from items.yaml, record #1: "
-	if err == nil || err.Error() != want+"query failed" || !errors.Is(err, errQuery) {
+	// The types of the columns are read first, once per table.
+	if err == nil || err.Error() != "datlas: diff items: master data \"items\" from items.yaml: query failed" || !errors.Is(err, errQuery) {
 		t.Fatalf("err = %v", err)
 	}
-	// The values compared are those the upsert writes, after the keys.
-	const query = "SELECT \"alias\" IS DISTINCT FROM $2, \"v\" IS DISTINCT FROM $3, \"price\" IS DISTINCT FROM $4, \"pm\" IS DISTINCT FROM $5, \"meta\" IS DISTINCT FROM $6, \"attrs\" IS DISTINCT FROM $7, \"note\" IS DISTINCT FROM $8, \"boom\" IS DISTINCT FROM $9 FROM \"items\" WHERE \"id\" = $1"
-	if len(q.calls) != 1 || q.calls[0].query != query {
+	if len(q.calls) != 1 || !strings.Contains(q.calls[0].query, "CAST('\"items\"' AS regclass)") || len(q.calls[0].args) != 0 {
 		t.Fatalf("calls: %+v", q.calls)
-	}
-	if got, w := driverValues(t, q.calls[0].args), []any{"a", "x", "v:q", int64(5), int64(9), "{\"a\":1}", "{\"k\":2}", "n", "\"ok\""}; !reflect.DeepEqual(got, w) {
-		t.Errorf("args: got %#v, want %#v", got, w)
-	}
-
-	data.FailText = true
-	defer func() { data.FailText = false }()
-	if _, err := data.DiffMasterData(context.Background(), &queryer{}); err == nil || err.Error() != want+"encode ID: bad code" {
-		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -308,16 +297,15 @@ func fmt() {}
 
 type json int
 
-type driver int
-
 var strings = 1
 
 var (
 	ctx, db, i, err, args, keys, step, steps, datlasRec, datlasCol1, datlasBytes int
-	changes, change, diff, stale, rows, key, vals, dest, distinct, changed, op, c, s, v int
+	changes, change, diff, stale, rows, key, keys2, vals, dest, distinct, changed, op, c, s, v int
+	records, query, types, slots, typ, name, exists, k, d int
 )
 
-var _, _, _, _, _ = sql{}, context, json(0), driver(0), strings
+var _, _, _, _ = sql{}, context, json(0), strings
 
 //datlas:master keys table=keys
 type KeyRow struct {
@@ -356,6 +344,6 @@ func TestApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, testutil.ReadFile(t, path), `context2 "context"`, `sql2 "database/sql"`, `fmt2 "fmt"`, `json2 "encoding/json"`, `driver2 "database/sql/driver"`, `strings2 "strings"`)
+	mustContain(t, testutil.ReadFile(t, path), `context2 "context"`, `sql2 "database/sql"`, `fmt2 "fmt"`, `json2 "encoding/json"`, `strings2 "strings"`)
 	testutil.GoTest(t, dir, "./data")
 }
