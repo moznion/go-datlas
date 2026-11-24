@@ -421,8 +421,8 @@ err = tx.Commit()
 - Each record is upserted by its logical key (`INSERT ... ON CONFLICT (key) DO UPDATE`), so the key
   columns need a primary key or unique constraint. Records of seed data without a key are inserted,
   so applying them twice inserts them twice.
-- Updating rows: the update writes every column except the keys. Options of the directive and of
-  `db` tags narrow it:
+- Updating rows: the update writes every column except the keys. The options below change what it
+  writes:
 
   ```go
   //datlas:master roles table=roles prune=false touch=updated_at skip_unchanged=true
@@ -449,9 +449,12 @@ err = tx.Commit()
     every application updates every existing row, so the column moves each time. It needs a logical key,
     since records without one are only inserted, and a column that is updated: when every column but the
     keys is insert-only, rows are never updated, which is an error.
-    The value is `CURRENT_TIMESTAMP`, a `timestamptz` holding the start of the transaction: every row
-    of one application gets the same time. Use a `timestamptz` column; a `timestamp` column stores the
-    local time of the session's `TimeZone`, and other types fail when the data is applied.
+    The value is `CURRENT_TIMESTAMP`, a `timestamptz` holding the start of the transaction. Applied
+    through a `*sql.Tx`, every row of one application gets the same time; through a `*sql.DB`, each
+    statement runs in a transaction of its own and gets its own time. Use a `timestamptz` column:
+    PostgreSQL converts the value to the types it has an assignment cast to, so a `timestamp` column
+    stores the local time of the session's `TimeZone` and `date`, `time` or `text` columns store a
+    converted value, while other types, such as `integer`, fail when the data is applied.
   - `skip_unchanged=true` leaves the rows whose updated columns already hold the values of the record,
     so their touch column does not move and row-level update triggers do not fire for them (statement-level
     triggers and `BEFORE INSERT` row triggers still do). It compares the columns with `IS DISTINCT FROM`,

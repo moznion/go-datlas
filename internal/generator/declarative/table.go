@@ -99,6 +99,9 @@ func parseDBTag(tag string) (dbTag, error) {
 	if !hasOpts {
 		return t, nil
 	}
+	if name == "-" {
+		return dbTag{}, fmt.Errorf("%q excludes the field, which takes no options; use %s:\"-\" alone", v, DBTagKey)
+	}
 	for _, o := range strings.Split(opts, ",") {
 		switch {
 		case o == "":
@@ -131,13 +134,11 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 		return nil, fmt.Errorf("%s: prune=true requires a logical key (`%s:\"key\"`) to tell the records of the dataset", ctx, kind.tagKey())
 	}
 	if len(schema.Keys) == 0 {
-		for _, o := range []struct {
-			name string
-			set  bool
-		}{{"touch=<column>", opts.touch != ""}, {"skip_unchanged=true", opts.skipUnchanged}} {
-			if o.set {
-				return nil, fmt.Errorf("%s: %s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, o.name, kind.tagKey())
-			}
+		if opts.touch != "" {
+			return nil, fmt.Errorf("%s: touch=%s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, opts.touch, kind.tagKey())
+		}
+		if opts.skipUnchanged {
+			return nil, fmt.Errorf("%s: skip_unchanged=true requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, kind.tagKey())
 		}
 	}
 	if opts.touch != "" {

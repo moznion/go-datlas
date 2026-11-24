@@ -39,6 +39,8 @@ type UpsertSpec struct {
 	// InsertOnly are the columns of Cols written by the insert only: the update leaves them alone.
 	InsertOnly []string
 	// Touch is a column, not in Cols, that the update sets to the current time, or empty.
+	// It is ignored when no column is updated (Updated is empty), since nothing is then updated:
+	// callers wanting the column to move must reject that case.
 	Touch string
 	// SkipUnchanged makes the update leave the rows whose updated columns already hold the values,
 	// which needs an equality operator for the types of these columns.
