@@ -27,6 +27,22 @@ datlas requires Go 1.26. Generated fixture factories import
 always resolved to the same version. `fixturekit` itself uses only the standard library.
 Generated master and seed data have no dependencies at all.
 
+### Prebuilt binaries
+
+Each [GitHub Release](https://github.com/moznion/go-datlas/releases) also ships prebuilt binaries
+for Linux, macOS and Windows (amd64 and arm64), named `datlas-<tag>-<os>-<arch>.tar.gz` (`.zip` on
+Windows), each with a `.sha256` checksum. Their build provenance is attested, so you can check that
+an archive was built from this repository's release workflow:
+
+```sh
+gh attestation verify datlas-<tag>-<os>-<arch>.tar.gz --repo moznion/go-datlas \
+  --signer-workflow moznion/go-datlas/.github/workflows/release-build.yml
+```
+
+A prebuilt binary is not tied to your module's `go.mod`, so keep its version in line with the
+`github.com/moznion/go-datlas` version your module requires for `fixturekit`. `go get -tool` does
+that for you.
+
 ## Commands
 
 ```
@@ -425,14 +441,23 @@ err = tx.Commit()
 
   - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
     the row is inserted and leaves it alone when the row is updated, e.g. a label users may rename.
-    Key fields cannot be insert-only. When every column but the keys is insert-only, existing rows are
-    left alone (`DO NOTHING`).
+    Key fields cannot be insert-only, and the option needs a logical key, since records without one are
+    only inserted. When every column but the keys is insert-only, existing rows are left alone
+    (`DO NOTHING`).
   - `touch=<column>` sets the column to the current time when a row is updated. The column is not a field
-    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`).
+    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`). Unless `skip_unchanged=true`,
+    every application updates every existing row, so the column moves each time. It needs a logical key,
+    since records without one are only inserted, and a column that is updated: when every column but the
+    keys is insert-only, rows are never updated, which is an error.
+    The value is `CURRENT_TIMESTAMP`, a `timestamptz` holding the start of the transaction: every row
+    of one application gets the same time. Use a `timestamptz` column; a `timestamp` column stores the
+    local time of the session's `TimeZone`, and other types fail when the data is applied.
   - `skip_unchanged=true` leaves the rows whose updated columns already hold the values of the record,
-    so their touch column does not move and no update trigger fires. It compares the columns with
-    `IS DISTINCT FROM`, which needs an equality operator for their types: use `jsonb`, not `json`.
-  - Both options need a logical key, since records without one are only inserted.
+    so their touch column does not move and row-level update triggers do not fire for them (statement-level
+    triggers and `BEFORE INSERT` row triggers still do). It compares the columns with `IS DISTINCT FROM`,
+    which needs an equality operator for their types: use `jsonb`, not `json`; `xml` and the geometric
+    types (`point`, `polygon`, ...) cannot be compared either. It needs a logical key, since records
+    without one are only inserted.
   - The keys are the `ON CONFLICT` target, which must match a unique constraint or index without a
     predicate: a partial unique index (`... WHERE company_id IS NULL`) is not matched.
 - **Prune**: after upserting, the rows whose keys are not in the data are deleted. Master data prunes
