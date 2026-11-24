@@ -70,10 +70,10 @@ func TestApplyMasterData(t *testing.T) {
 	mustContain(t, src,
 		"func ApplyMasterData(ctx context.Context, db interface {",
 		"datlasMasterUpsertItems, datlasMasterUpsertPairs, datlasMasterPruneItems, }",
-		`INSERT INTO "app"."items" ("created_at", "id", "alias", "title", "price", "tags", "attrs", "ttl") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT ("id") DO UPDATE SET`,
+		`INSERT INTO "app"."items" AS "datlas_target" ("created_at", "id", "alias", "title", "price", "tags", "attrs", "ttl") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT ("id") DO UPDATE SET`,
 		`DELETE FROM "app"."items" WHERE "id" NOT IN ($1, $2)`,
 		`keys = append(keys, args[1])`,
-		`INSERT INTO "pairs" ("a", "b") VALUES ($1, $2) ON CONFLICT ("a", "b") DO NOTHING`,
+		`INSERT INTO "pairs" AS "datlas_target" ("a", "b") VALUES ($1, $2) ON CONFLICT ("a", "b") DO NOTHING`,
 		"datlasCol1, err := datlasRec.ID.MarshalText()",
 		"if datlasRec.Alias != nil {",
 		"&datlasRec.Price",
@@ -98,7 +98,7 @@ func TestApplyUpsertOptions(t *testing.T) {
 	}
 	testutil.TypeCheck(t, dir, ".")
 	mustContain(t, testutil.ReadFile(t, path),
-		`INSERT INTO "roles" ("id", "label", "role_name", "perm") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP WHERE "roles"."perm" IS DISTINCT FROM EXCLUDED."perm"`,
+		`INSERT INTO "roles" AS "datlas_target" ("id", "label", "role_name", "perm") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP WHERE "datlas_target"."perm" IS DISTINCT FROM EXCLUDED."perm"`,
 	)
 }
 
@@ -111,7 +111,7 @@ func TestApplyOnlyInsertOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, testutil.ReadFile(t, path), `INSERT INTO "roles" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`)
+	mustContain(t, testutil.ReadFile(t, path), `INSERT INTO "roles" AS "datlas_target" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`)
 }
 
 func TestApplyMasterDataAbsentWithoutTables(t *testing.T) {
@@ -193,6 +193,7 @@ func TestTableErrors(t *testing.T) {
 		}, want: "R.B: an inline struct has no column of its own"},
 		{name: "touch without table", files: master("//datlas:master roles touch=updated_at", ""), want: "touch has no effect without table=<name>"},
 		{name: "options without table", files: master("//datlas:master roles touch=updated_at skip_unchanged=true", ""), want: "touch, skip_unchanged have no effect without table=<name>"},
+		{name: "prune and touch without table", files: master("//datlas:master roles prune=false touch=updated_at", ""), want: "prune, touch have no effect without table=<name>"},
 		{name: "empty touch", files: master("//datlas:master roles table=r touch=", ""), want: `unknown or repeated option "touch="`},
 		{name: "skip_unchanged=false", files: master("//datlas:master roles table=r skip_unchanged=false", ""), want: `unknown or repeated option "skip_unchanged=false"`},
 		{name: "invalid touch", files: master("//datlas:master roles table=r touch=a-b", ""), want: `invalid touch column name "a-b"`},
@@ -287,4 +288,17 @@ func TestImportNamesUnchanged(t *testing.T) {
 	}
 	mustContain(t, testutil.ReadFile(t, path), `"example.com/datlastest/keys"`, `RoleCodeA keys.K = "a"`)
 	testutil.TypeCheck(t, filepath.Dir(path), ".")
+}
+
+// TestTouchKeyColumnError checks that a key field whose column is the touch column gets that error only,
+// not also the error of an excluded key.
+func TestTouchKeyColumnError(t *testing.T) {
+	_, err := generate(t, MasterData, map[string]string{
+		"schema.go":  "package data\n\n//datlas:master roles table=r touch=code\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n\tName string `yaml:\"name\"`\n}\n",
+		"roles.yaml": "[]\n",
+	})
+	mustFail(t, err, `R.Code: column "code" is the touch column`)
+	if strings.Contains(err.Error(), "cannot be excluded") {
+		t.Errorf("error also says the key is excluded: %v", err)
+	}
 }

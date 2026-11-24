@@ -154,6 +154,9 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 		errs   []error
 		byName = map[string]string{}
 		byVar  = map[*types.Var]int{}
+		// excluded are the fields excluded with `db:"-"`. Other fields missing from byVar were rejected
+		// with an error of their own.
+		excluded = map[*types.Var]bool{}
 	)
 	var walk func(st *types.Struct, path string)
 	walk = func(st *types.Struct, path string) {
@@ -166,6 +169,7 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 				errs = append(errs, fmt.Errorf("%s: %w", fctx, err))
 				continue
 			case tag.skip:
+				excluded[f.v] = true
 				continue
 			}
 			name := tag.name
@@ -219,7 +223,9 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	for _, k := range schema.Keys {
 		i, ok := byVar[k]
 		if !ok {
-			errs = append(errs, fmt.Errorf("%s.%s: a logical key field cannot be excluded from the table", ctx, k.Name()))
+			if excluded[k] {
+				errs = append(errs, fmt.Errorf("%s.%s: a logical key field cannot be excluded from the table", ctx, k.Name()))
+			}
 			continue
 		}
 		if t.Columns[i].InsertOnly {

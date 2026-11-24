@@ -1,7 +1,7 @@
 // Package edgecases holds datasets exercising edge cases of the generated SQL
 // (an empty dataset, a schema-qualified table, records without a key, an insert-only column of a table
-// shared with the application, touch and skip_unchanged, also on a schema-qualified table);
-// see ../dbapply_test.go.
+// shared with the application, a table named excluded, touch and skip_unchanged, also on a
+// schema-qualified table); see ../dbapply_test.go.
 package edgecases
 
 //go:generate go tool datlas master -dir master
@@ -43,6 +43,15 @@ type Grade struct {
 //
 //datlas:master settings table=config.settings skip_unchanged=true
 type Setting struct {
+	Name  string `yaml:"name" master:"key"`
+	Value string `yaml:"value"`
+}
+
+// Leftover is in a table named excluded, the name PostgreSQL gives the row proposed for insertion
+// in ON CONFLICT DO UPDATE.
+//
+//datlas:master leftovers table=excluded
+type Leftover struct {
 	Name  string `yaml:"name" master:"key"`
 	Value string `yaml:"value"`
 }
