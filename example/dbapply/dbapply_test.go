@@ -162,8 +162,7 @@ DROP TABLE IF EXISTS events, tags, grades;
 CREATE SCHEMA config;
 CREATE TABLE config.flags (name text PRIMARY KEY);
 CREATE TABLE grades (
-	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL,
-	updated_at timestamptz NOT NULL DEFAULT now()
+	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL
 );
 CREATE TABLE events (kind text NOT NULL, payload jsonb NOT NULL);
 CREATE TABLE tags (name text PRIMARY KEY);

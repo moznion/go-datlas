@@ -424,8 +424,9 @@ err = tx.Commit()
 
   - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
     the row is inserted and leaves it alone when the row is updated, e.g. a label users may rename.
-    Key fields cannot be insert-only. When every column but the keys is insert-only, existing rows are
-    left alone (`DO NOTHING`).
+    Key fields cannot be insert-only, and the option needs a logical key, since records without one are
+    only inserted. When every column but the keys is insert-only, existing rows are left alone
+    (`DO NOTHING`).
   - `touch=<column>` sets the column to the current time when a row is updated. The column is not a field
     of the schema: on insert it takes its default value (e.g. `DEFAULT now()`). Every application updates
     every existing row, so the column moves each time. It needs a logical key, since records without one

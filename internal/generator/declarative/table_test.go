@@ -158,8 +158,14 @@ func TestTableErrors(t *testing.T) {
 		{name: "prune without table", files: master("//datlas:master roles prune=false", ""), want: "prune has no effect without table=<name>"},
 		{name: "duplicate column", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"code\"`\n"), want: `column "code" is also used by Code`},
 		{name: "invalid column", files: master("//datlas:master roles table=r", "\tName string `yaml:\"the-name\"`\n"), want: `invalid column name "the-name"`},
-		{name: "db tag options", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,omitempty\"`\n"), want: `unknown or repeated db tag option "omitempty" (available: insertonly)`},
-		{name: "repeated insertonly", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\",insertonly,insertonly\"`\n"), want: `unknown or repeated db tag option "insertonly"`},
+		{name: "db tag options", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,omitempty\"`\n"), want: `unknown db tag option "omitempty" (available: insertonly)`},
+		{name: "repeated insertonly", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\",insertonly,insertonly\"`\n"), want: `repeated db tag option "insertonly"`},
+		{name: "trailing comma", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,\"`\n"), want: `empty db tag option in "name," (available: insertonly)`},
+		{name: "trailing comma after insertonly", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,insertonly,\"`\n"), want: `empty db tag option in "name,insertonly,"`},
+		{name: "insertonly keyless seed", kind: SeedData, files: map[string]string{
+			"schema.go":         "package data\n\n//datlas:seed events table=events\ntype E struct {\n\tA string `db:\",insertonly\"`\n}\n",
+			"local/events.yaml": "[]\n",
+		}, want: "E.A: insertonly requires a logical key"},
 		{name: "insertonly key", files: map[string]string{
 			"schema.go":  "package data\n\n//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\" db:\",insertonly\"`\n\tName string `yaml:\"name\"`\n}\n",
 			"roles.yaml": "[]\n",
@@ -167,7 +173,11 @@ func TestTableErrors(t *testing.T) {
 		{name: "insertonly inline", files: map[string]string{
 			"schema.go":  "package data\n\ntype B struct {\n\tX string `yaml:\"x\"`\n}\n\n//datlas:master roles table=r\ntype R struct {\n\tB `yaml:\",inline\" db:\",insertonly\"`\n\tCode string `yaml:\"code\" master:\"key\"`\n}\n",
 			"roles.yaml": "[]\n",
-		}, want: "an inline struct has no column of its own"},
+		}, want: "R.B: insertonly cannot be set on an inline struct"},
+		{name: "inline with a column name", files: map[string]string{
+			"schema.go":  "package data\n\ntype B struct {\n\tX string `yaml:\"x\"`\n}\n\n//datlas:master roles table=r\ntype R struct {\n\tB `yaml:\",inline\" db:\"b\"`\n\tCode string `yaml:\"code\" master:\"key\"`\n}\n",
+			"roles.yaml": "[]\n",
+		}, want: "R.B: an inline struct has no column of its own"},
 		{name: "touch without table", files: master("//datlas:master roles touch=updated_at", ""), want: "touch has no effect without table=<name>"},
 		{name: "empty touch", files: master("//datlas:master roles table=r touch=", ""), want: `unknown or repeated option "touch="`},
 		{name: "invalid touch", files: master("//datlas:master roles table=r touch=a-b", ""), want: `invalid touch column name "a-b"`},
