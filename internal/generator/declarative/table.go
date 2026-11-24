@@ -24,6 +24,9 @@ type Table struct {
 	Name string
 	// Prune deletes the rows whose keys are not in the dataset after applying it.
 	Prune bool
+	// Touch is a column, not filled from the records, set to the current time when a row is updated
+	// (touch=<column>), or empty.
+	Touch string
 	// Columns are the columns written for each record, in field order.
 	Columns []Column
 	// Keys are the indexes in Columns of the logical key, in the order of Schema.Keys.
@@ -67,6 +70,7 @@ type Column struct {
 type tableOptions struct {
 	name  string
 	prune bool
+	touch string
 }
 
 // dbTag is a parsed `db` tag.
@@ -117,7 +121,18 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	if prune && len(schema.Keys) == 0 {
 		return nil, fmt.Errorf("%s: prune=true requires a logical key (`%s:\"key\"`) to tell the records of the dataset", ctx, kind.tagKey())
 	}
-	t := &Table{Name: table, Prune: prune}
+	if opts.touch != "" && len(schema.Keys) == 0 {
+		return nil, fmt.Errorf("%s: touch=<column> requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, kind.tagKey())
+	}
+	if opts.touch != "" {
+		if !sqldialect.ValidIdentifier(opts.touch) {
+			return nil, fmt.Errorf("%s: invalid touch column name %q (letters, digits and '_')", ctx, opts.touch)
+		}
+		if err := dialect.CheckIdentifier(opts.touch); err != nil {
+			return nil, fmt.Errorf("%s: touch column name: %w", ctx, err)
+		}
+	}
+	t := &Table{Name: table, Prune: prune, Touch: opts.touch}
 	var (
 		errs   []error
 		byName = map[string]string{}
@@ -158,6 +173,10 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 			}
 			if prev, dup := byName[name]; dup {
 				errs = append(errs, fmt.Errorf("%s: column %q is also used by %s", fctx, name, prev))
+				continue
+			}
+			if name == opts.touch {
+				errs = append(errs, fmt.Errorf("%s: column %q is the touch column, which is set to the current time rather than written from the records", fctx, name))
 				continue
 			}
 			byName[name] = fpath

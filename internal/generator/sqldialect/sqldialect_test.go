@@ -15,9 +15,11 @@ func TestPostgres(t *testing.T) {
 			`INSERT INTO "perms" ("role", "action") VALUES ($1, $2) ON CONFLICT ("role", "action") DO NOTHING`},
 		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "label", "perm"}, Keys: []string{"id"}, InsertOnly: []string{"label"}}),
 			`INSERT INTO "roles" ("id", "label", "perm") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm"`},
-		// Every column but the key is insert-only: nothing to update.
-		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "label"}, Keys: []string{"id"}, InsertOnly: []string{"label"}}),
+		// Every column but the key is insert-only: nothing to update, so the touch column is left alone too.
+		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "label"}, Keys: []string{"id"}, InsertOnly: []string{"label"}, Touch: "updated_at"}),
 			`INSERT INTO "roles" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`},
+		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "perm"}, Keys: []string{"id"}, Touch: "updated_at"}),
+			`INSERT INTO "roles" ("id", "perm") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP`},
 		{d.DeleteExcept("roles", []string{"code"}, 0), `DELETE FROM "roles"`},
 		{d.DeleteExcept("roles", []string{"code"}, 2), `DELETE FROM "roles" WHERE "code" NOT IN ($1, $2)`},
 		{d.DeleteExcept("perms", []string{"role", "action"}, 2),

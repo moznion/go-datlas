@@ -392,7 +392,7 @@ dialects implement one interface in the generator, so others can be added withou
 
 - Records are upserted by their logical key; records without one are inserted.
 - The update writes the values of the record, except for columns the application owns after the insert
-  (`db:",insertonly"`, e.g. labels users rename).
+  (`db:",insertonly"`, e.g. labels users rename). `touch=<column>` records when a row was updated.
 - Master Data is the specification, so rows whose keys are not in it are deleted (prune), unless
   `prune=false`. Seed data tables also hold rows the application creates, so seed data prunes only
   with `prune=true`.
