@@ -205,6 +205,56 @@ func TestErrors(t *testing.T) {
 	}
 }
 
+// queryer records the queries of the Diff functions, failing them since a *sql.Rows cannot be made up.
+type queryer struct{ calls []call }
+
+var errQuery = errors.New("query failed")
+
+func (q *queryer) QueryContext(_ context.Context, query string, args ...any) (*sql.Rows, error) {
+	q.calls = append(q.calls, call{query, args})
+	return nil, errQuery
+}
+
+func TestDiffErrors(t *testing.T) {
+	var q queryer
+	_, err := data.DiffMasterData(context.Background(), &q)
+	// The types of the columns are read first, once per table.
+	if err == nil || err.Error() != "datlas: diff items: master data \"items\" from items.yaml: query failed" || !errors.Is(err, errQuery) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(q.calls) != 1 || !strings.Contains(q.calls[0].query, "CAST('\"items\"' AS regclass)") || len(q.calls[0].args) != 0 {
+		t.Fatalf("calls: %+v", q.calls)
+	}
+}
+
+func TestDiffSeed(t *testing.T) {
+	// Records without a logical key are inserted: nothing is queried.
+	var q queryer
+	changes, err := data.DiffSeedData(context.Background(), &q, "local")
+	if err != nil || len(q.calls) != 0 {
+		t.Fatalf("err = %v, calls: %+v", err, q.calls)
+	}
+	want := []data.SeedDataChange{{Op: data.SeedDataInsert, Table: "events", Dataset: "events", Source: "local/events.yaml", Record: 1}}
+	if !reflect.DeepEqual(changes, want) {
+		t.Fatalf("changes: %+v", changes)
+	}
+	if s := changes[0].String(); s != "insert events: local/events.yaml #1" {
+		t.Errorf("String() = %q", s)
+	}
+	if _, err := data.DiffSeedData(context.Background(), &q, "prod"); err == nil || err.Error() != "datlas: no seed data for environment \"prod\"" {
+		t.Fatalf("unknown env: %v", err)
+	}
+	for op, want := range map[data.SeedDataOp]string{data.SeedDataInsert: "insert", data.SeedDataUpdate: "update", data.SeedDataUnchanged: "unchanged", data.SeedDataDelete: "delete", 9: "SeedDataOp(9)"} {
+		if got := op.String(); got != want {
+			t.Errorf("%d: String() = %q, want %q", op, got, want)
+		}
+	}
+	c := data.MasterDataChange{Op: data.MasterDataUpdate, Table: "items", Source: "items.yaml", Record: 2, Key: []string{"a", "b"}, Columns: []string{"v", "pm"}}
+	if s := c.String(); s != "update items (a, b): items.yaml #2: v, pm" {
+		t.Errorf("String() = %q", s)
+	}
+}
+
 func TestSeedErrors(t *testing.T) {
 	r := recorder{failOn: "INSERT"}
 	err := data.ApplySeedData(context.Background(), &r, "local")
@@ -247,11 +297,15 @@ func fmt() {}
 
 type json int
 
+var strings = 1
+
 var (
 	ctx, db, i, err, args, keys, step, steps, datlasRec, datlasCol1, datlasBytes int
+	changes, change, diff, stale, rows, key, keys2, vals, dest, distinct, changed, op, c, s, v int
+	records, query, types, slots, typ, name, exists, k, d int
 )
 
-var _, _, _ = sql{}, context, json(0)
+var _, _, _, _ = sql{}, context, json(0), strings
 
 //datlas:master keys table=keys
 type KeyRow struct {
@@ -290,7 +344,7 @@ func TestApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, testutil.ReadFile(t, path), `context2 "context"`, `sql2 "database/sql"`, `fmt2 "fmt"`, `json2 "encoding/json"`)
+	mustContain(t, testutil.ReadFile(t, path), `context2 "context"`, `sql2 "database/sql"`, `fmt2 "fmt"`, `json2 "encoding/json"`, `strings2 "strings"`)
 	testutil.GoTest(t, dir, "./data")
 }
 

@@ -60,14 +60,17 @@ func renderApply(b *bytes.Buffer, im *output.Imports, kind Kind, datasets []*Dat
 		}
 		if err := r.renderDataset(ds); err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		r.renderDatasetDiff(ds)
 	}
 	if err := errors.Join(errs...); err != nil {
 		return err
 	}
 
-	// steps returns the functions applying the datasets of env in order.
-	steps := func(env string) []string {
+	// steps returns the functions applying the datasets of env in order, named by upsert or prune
+	// followed by the name of the dataset.
+	steps := func(env, upsert, prune string) []string {
 		byName := map[string]*Dataset{}
 		for _, ds := range datasets {
 			if ds.Env == env && ds.Table != nil {
@@ -80,9 +83,9 @@ func renderApply(b *bytes.Buffer, im *output.Imports, kind Kind, datasets []*Dat
 			if ds == nil {
 				continue
 			}
-			upserts = append(upserts, p+"Upsert"+ds.FuncName)
+			upserts = append(upserts, p+upsert+ds.FuncName)
 			if r.prunes(ds) {
-				prunes = append([]string{p + "Prune" + ds.FuncName}, prunes...)
+				prunes = append([]string{p + prune + ds.FuncName}, prunes...)
 			}
 		}
 		return append(upserts, prunes...)
@@ -95,6 +98,16 @@ func renderApply(b *bytes.Buffer, im *output.Imports, kind Kind, datasets []*Dat
 		b.WriteString("}")
 	}
 
+	var envs []string
+	seen := map[string]bool{}
+	for _, ds := range datasets {
+		if !seen[ds.Env] {
+			seen[ds.Env] = true
+			envs = append(envs, ds.Env)
+		}
+	}
+	envs = sortedStrings(envs)
+
 	fmt.Fprintf(b, "\n// %sDB is the database the %s is applied to.\ntype %sDB = %s\n", p, kind, p, execIface)
 	if kind == MasterData {
 		fmt.Fprintf(b, `
@@ -104,19 +117,12 @@ func renderApply(b *bytes.Buffer, im *output.Imports, kind Kind, datasets []*Dat
 // db is typically a *sql.DB, *sql.Tx or *sql.Conn; pass a *sql.Tx to apply all or nothing.
 func %[1]s(ctx %[3]s.Context, db %[4]s) error {
 for _, step := range `, applyMasterName, masterDatasetsName, r.ctxPkg, execIface)
-		renderSteps(steps(""))
+		renderSteps(steps("", "Upsert", "Prune"))
 		b.WriteString(" {\nif err := step(ctx, db); err != nil {\nreturn err\n}\n}\nreturn nil\n}\n")
+		r.renderDiff(envs, steps)
 		return nil
 	}
 
-	var envs []string
-	seen := map[string]bool{}
-	for _, ds := range datasets {
-		if !seen[ds.Env] {
-			seen[ds.Env] = true
-			envs = append(envs, ds.Env)
-		}
-	}
 	fmt.Fprintf(b, `
 // %[1]s applies the seed data of the environment env to the database db: it inserts the records
 // of every dataset having a table, updating the rows whose keys exist (upsert), in the order of %[2]s,
@@ -127,13 +133,14 @@ func %[1]s(ctx %[3]s.Context, db %[4]s, env string) error {
 var steps []func(%[3]s.Context, %[5]sDB) error
 switch env {
 `, applySeedName, seedDatasetsName, r.ctxPkg, execIface, p)
-	for _, env := range sortedStrings(envs) {
+	for _, env := range envs {
 		fmt.Fprintf(b, "case %q:\nsteps = ", env)
-		renderSteps(steps(env))
+		renderSteps(steps(env, "Upsert", "Prune"))
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(b, "default:\nreturn %s.Errorf(\"datlas: no seed data for environment %%q\", env)\n}\n", r.fmtPkg)
 	b.WriteString("for _, step := range steps {\nif err := step(ctx, db); err != nil {\nreturn err\n}\n}\nreturn nil\n}\n")
+	r.renderDiff(envs, steps)
 	return nil
 }
 

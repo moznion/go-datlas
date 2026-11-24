@@ -403,6 +403,11 @@ dialects implement one interface in the generator, so others can be added withou
   `prune=false`. Seed data tables also hold rows the application creates, so seed data prunes only
   with `prune=true`.
 - Columns are named by `db` tags or YAML keys. Values that are not scalars are stored as JSON.
+- `DiffMasterData(ctx, db)` and `DiffSeedData(ctx, db, env)` report what applying would do, row by row,
+  without writing (a dry run). They compare in SQL, with the parameters the statements of `Apply...` take,
+  converted to the types of the columns read from the catalog, so values are encoded once, rounded as
+  storing them does, and compared as `skip_unchanged=true` compares them; reading rows back into Go
+  values would need a decoder for every encoding.
 
 Datasets without a table are not written; the application consumes their generated Go values.
 `SeedFor(env)` gives the seed data of an environment by name.

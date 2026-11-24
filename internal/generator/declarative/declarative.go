@@ -943,11 +943,10 @@ func assignNames(kind Kind, pkg *packages.Package, pkgDir string, datasets []*Da
 		claim(masterDatasetsName, "master data")
 	}
 	if hasTables(datasets) {
-		name := applyMasterName
-		if kind == SeedData {
-			name = applySeedName
+		fn, change, op, ops := kind.diffNames()
+		for _, n := range append([]string{kind.applyName(), fn, change, op}, ops[:]...) {
+			claim(n, kind.String())
 		}
-		claim(name, kind.String())
 	}
 	for _, ds := range datasets {
 		ds.FuncName = naming.Camel(ds.Env) + naming.Camel(ds.Name)

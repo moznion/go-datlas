@@ -22,6 +22,18 @@ type Dialect interface {
 	// DeleteExcept deletes the rows whose keys are none of the given rows of keys.
 	// It takes rows*len(keys) parameters, row by row; with no rows it deletes every row.
 	DeleteExcept(table string, keys []string, rows int) string
+	// ColumnTypes selects the name and the type of every column of table, the type being what Compare
+	// takes for the column.
+	ColumnTypes(table string) string
+	// Compare is a template, for fmt.Sprintf, of the query comparing a record with the row having its keys.
+	// The template takes the types of keys then of cols, from ColumnTypes, as %[1]s, %[2]s, and so on.
+	// The query takes the values of keys then of cols, and selects one row: the keys as text, the values
+	// being converted to the types of the columns as storing them does; whether the row exists; then,
+	// for each of cols, whether the row holds another value.
+	Compare(table string, keys, cols []string) string
+	// SelectExcept selects, as text and ordered by the keys, the keys of the rows DeleteExcept deletes.
+	// It takes the same parameters.
+	SelectExcept(table string, keys []string, rows int) string
 	// MaxParams is the largest number of parameters a statement can take.
 	MaxParams() int
 	// CheckIdentifier reports why name, a valid identifier (see ValidIdentifier) of a table,
@@ -199,15 +211,59 @@ func (d postgres) Upsert(u UpsertSpec) string {
 }
 
 func (d postgres) DeleteExcept(table string, keys []string, rows int) string {
+	return "DELETE FROM " + d.quote(table) + d.whereNotIn(keys, rows)
+}
+
+func (d postgres) SelectExcept(table string, keys []string, rows int) string {
+	casts := make([]string, len(keys))
+	for i, k := range keys {
+		casts[i] = fmt.Sprintf("CAST(%s AS text)", d.quote(k))
+	}
+	return fmt.Sprintf("SELECT %s FROM %s%s ORDER BY %s", strings.Join(casts, ", "), d.quote(table), d.whereNotIn(keys, rows), d.quoteAll(keys))
+}
+
+// whereNotIn returns the condition, from a space, matching the rows whose keys are none of the rows of keys.
+func (d postgres) whereNotIn(keys []string, rows int) string {
 	if rows == 0 {
-		return "DELETE FROM " + d.quote(table)
+		return ""
 	}
 	if len(keys) == 1 {
-		return fmt.Sprintf("DELETE FROM %s WHERE %s NOT IN (%s)", d.quote(table), d.quote(keys[0]), d.params(1, rows))
+		return fmt.Sprintf(" WHERE %s NOT IN (%s)", d.quote(keys[0]), d.params(1, rows))
 	}
 	tuples := make([]string, rows)
 	for i := range tuples {
 		tuples[i] = "(" + d.params(1+i*len(keys), len(keys)) + ")"
 	}
-	return fmt.Sprintf("DELETE FROM %s WHERE (%s) NOT IN (%s)", d.quote(table), d.quoteAll(keys), strings.Join(tuples, ", "))
+	return fmt.Sprintf(" WHERE (%s) NOT IN (%s)", d.quoteAll(keys), strings.Join(tuples, ", "))
+}
+
+// ColumnTypes reads the catalog. Compare converts the values to these types, applying their modifiers
+// (e.g. the scale of numeric(10,2)) as storing does. json columns, which have no equality operator,
+// are compared as jsonb.
+func (d postgres) ColumnTypes(table string) string {
+	return "SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END " +
+		"FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('" + d.quote(table) + "' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped"
+}
+
+// Compare compares with IS DISTINCT FROM, as skip_unchanged=true does, so NULL equals NULL.
+// The row of values is joined to the table, so that the query selects a row when the table has none.
+func (d postgres) Compare(table string, keys, cols []string) string {
+	const t, v = `"datlas_t"`, `"datlas_v"`
+	all := append(append([]string(nil), keys...), cols...)
+	var sel, vals, on []string
+	for _, k := range keys {
+		sel = append(sel, fmt.Sprintf("CAST(%s.%s AS text)", v, d.quote(k)))
+	}
+	sel = append(sel, fmt.Sprintf("%s.%s IS NOT NULL", t, d.quote(keys[0])))
+	for i, c := range cols {
+		sel = append(sel, fmt.Sprintf("CAST(%s.%s AS %%[%d]s) IS DISTINCT FROM %s.%s", t, d.quote(c), len(keys)+i+1, v, d.quote(c)))
+	}
+	for i := range all {
+		vals = append(vals, fmt.Sprintf("CAST($%d AS %%[%d]s)", i+1, i+1))
+	}
+	for _, k := range keys {
+		on = append(on, fmt.Sprintf("%s.%s = %s.%s", t, d.quote(k), v, d.quote(k)))
+	}
+	return fmt.Sprintf("SELECT %s FROM (VALUES (%s)) AS %s (%s) LEFT JOIN %s AS %s ON %s",
+		strings.Join(sel, ", "), strings.Join(vals, ", "), v, d.quoteAll(all), d.quote(table), t, strings.Join(on, " AND "))
 }

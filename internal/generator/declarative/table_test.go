@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moznion/go-datlas/internal/generator/naming"
 	"github.com/moznion/go-datlas/internal/generator/testutil"
 )
 
@@ -119,7 +120,7 @@ func TestApplyMasterDataAbsentWithoutTables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if src := testutil.ReadFile(t, path); strings.Contains(src, "ApplyMasterData") || strings.Contains(src, "database/sql") {
+	if src := testutil.ReadFile(t, path); strings.Contains(src, "ApplyMasterData") || strings.Contains(src, "DiffMasterData") || strings.Contains(src, "database/sql") {
 		t.Fatalf("generated Apply without tables:\n%s", src)
 	}
 }
@@ -147,6 +148,24 @@ func TestApplySeedData(t *testing.T) {
 		"INSERT INTO \"events\" (\"company\") VALUES ($1)`",
 		`DELETE FROM "companies" WHERE "key" NOT IN ($1, $2)`,
 	)
+}
+
+// TestDiffNames generates the diff of datasets whose names continue those of others: the functions
+// of prune_roles and of the prune of roles, or of a dataset index next to the index of a dataset diff_upsert.
+func TestDiffNames(t *testing.T) {
+	keyed := func(name string) string {
+		typ := naming.Camel(name) + "Def"
+		return "//datlas:master " + name + " table=" + name + "\ntype " + typ + " struct {\n\tK string `yaml:\"k\" master:\"key\"`\n\tV int `yaml:\"v\"`\n}\n\n"
+	}
+	files := map[string]string{"schema.go": "package data\n\n" + keyed("roles") + keyed("prune_roles") + keyed("index") + keyed("diff_upsert")}
+	for _, name := range []string{"roles", "prune_roles", "index", "diff_upsert"} {
+		files[name+".yaml"] = "- {k: a, v: 1}\n"
+	}
+	dir := testutil.WriteTree(t, files)
+	if _, err := run(MasterData, Config{Dir: dir, Package: "."}); err != nil {
+		t.Fatal(err)
+	}
+	testutil.TypeCheck(t, dir, ".")
 }
 
 func TestTableErrors(t *testing.T) {
@@ -234,6 +253,15 @@ func TestTableErrors(t *testing.T) {
 			"schema.go":         "package data\n\n//datlas:seed events table=events\ntype E struct {\n\tA string\n}\n\nfunc ApplySeedData() {}\n",
 			"local/events.yaml": "[]\n",
 		}, want: "generated identifier ApplySeedData conflicts with the declaration"},
+		{name: "diff name conflict", files: func() map[string]string {
+			f := master("//datlas:master roles table=r", "")
+			f["schema.go"] += "\ntype MasterDataChange struct{}\n"
+			return f
+		}(), want: "generated identifier MasterDataChange conflicts with the declaration"},
+		{name: "seed diff name conflict", kind: SeedData, files: map[string]string{
+			"schema.go":         "package data\n\n//datlas:seed events table=events\ntype E struct {\n\tA string\n}\n\nconst SeedDataUnchanged = 0\n",
+			"local/events.yaml": "[]\n",
+		}, want: "generated identifier SeedDataUnchanged conflicts with the declaration"},
 		{name: "upper-case table", files: master("//datlas:master roles table=app.Roles", ""), want: `table name: "Roles" has upper-case letters, which PostgreSQL folds to lower case unless quoted; use "roles"`},
 		{name: "upper-case YAML key", files: master("//datlas:master roles table=r", "\tName string `yaml:\"displayName\"`\n"), want: `column name: "displayName" has upper-case letters`},
 		{name: "upper-case db tag", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"Name\"`\n"), want: `column name: "Name" has upper-case letters`},
