@@ -14,7 +14,7 @@ import (
 // Datasets without an order between them are in name order. Datasets referring to each other
 // in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
 func MasterDatasets() []string {
-	return []string{"flags", "grades", "leftovers"}
+	return []string{"flags", "grades", "leftovers", "settings"}
 }
 
 // Flags returns the master data "flags", compiled from flags.yaml.
@@ -77,6 +77,49 @@ func datlasMasterGrades1() Grade {
 		Permission: GradePermission{
 			Actions: []string{"read"},
 		},
+	}
+}
+
+// Logical keys of Settings (Name).
+const (
+	SettingNameLocale string = "locale"
+	SettingNameTheme  string = "theme"
+)
+
+// Settings returns the master data "settings", compiled from settings.yaml.
+// Each call returns a new copy that the caller may modify freely.
+func Settings() []Setting {
+	return []Setting{
+		datlasMasterSettings0(),
+		datlasMasterSettings1(),
+	}
+}
+
+// SettingByName returns the record of Settings whose Name equals the given value.
+// Each call returns a new copy.
+//
+//datlas:keys settings
+func SettingByName(key string) (Setting, bool) {
+	switch key {
+	case "locale":
+		return datlasMasterSettings0(), true
+	case "theme":
+		return datlasMasterSettings1(), true
+	}
+	return Setting{}, false
+}
+
+func datlasMasterSettings0() Setting {
+	return Setting{
+		Name:  "locale",
+		Value: "ja",
+	}
+}
+
+func datlasMasterSettings1() Setting {
+	return Setting{
+		Name:  "theme",
+		Value: "dark",
 	}
 }
 
@@ -161,11 +204,46 @@ func datlasMasterUpsertGrades(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Grades() {
 		args, err := datlasMasterRowGrades(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "grades" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "grades" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP WHERE "datlas_target"."permission" IS DISTINCT FROM EXCLUDED."permission"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into grades: master data "grades" from grades.yaml, record`, i+1, err)
 		}
+	}
+	return nil
+}
+
+// datlasMasterRowSettings returns the values of the columns of table config.settings for a record.
+func datlasMasterRowSettings(datlasRec Setting) ([]any, error) {
+	return []any{datlasRec.Name, datlasRec.Value}, nil
+}
+
+// datlasMasterUpsertSettings applies the records of Settings to table config.settings.
+func datlasMasterUpsertSettings(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Settings() {
+		args, err := datlasMasterRowSettings(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "config"."settings" AS "datlas_target" ("name", "value") VALUES ($1, $2) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value" WHERE "datlas_target"."value" IS DISTINCT FROM EXCLUDED."value"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into config.settings: master data "settings" from settings.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterPruneSettings deletes the rows of table config.settings whose keys are not in Settings.
+func datlasMasterPruneSettings(ctx context.Context, db datlasMasterDB) error {
+	var keys []any
+	for i, datlasRec := range Settings() {
+		args, err := datlasMasterRowSettings(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune config.settings: master data "settings" from settings.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "config"."settings" WHERE "name" NOT IN ($1, $2)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune config.settings: master data "settings" from settings.yaml`, err)
 	}
 	return nil
 }
@@ -221,6 +299,8 @@ func ApplyMasterData(ctx context.Context, db interface {
 		datlasMasterUpsertFlags,
 		datlasMasterUpsertGrades,
 		datlasMasterUpsertLeftovers,
+		datlasMasterUpsertSettings,
+		datlasMasterPruneSettings,
 		datlasMasterPruneLeftovers,
 		datlasMasterPruneFlags,
 	} {

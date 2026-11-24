@@ -27,6 +27,8 @@ type Table struct {
 	// Touch is a column, not filled from the records, set to the current time when a row is updated
 	// (touch=<column>), or empty.
 	Touch string
+	// SkipUnchanged leaves the rows whose columns already hold the values of the record (skip_unchanged=true).
+	SkipUnchanged bool
 	// Columns are the columns written for each record, in field order.
 	Columns []Column
 	// Keys are the indexes in Columns of the logical key, in the order of Schema.Keys.
@@ -68,9 +70,10 @@ type Column struct {
 
 // tableOptions are the options of the directive mapping a dataset to a table.
 type tableOptions struct {
-	name  string
-	prune bool
-	touch string
+	name          string
+	prune         bool
+	touch         string
+	skipUnchanged bool
 }
 
 // dbTag is a parsed `db` tag.
@@ -130,8 +133,17 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	if prune && len(schema.Keys) == 0 {
 		return nil, fmt.Errorf("%s: prune=true requires a logical key (`%s:\"key\"`) to tell the records of the dataset", ctx, kind.tagKey())
 	}
-	if opts.touch != "" && len(schema.Keys) == 0 {
-		return nil, fmt.Errorf("%s: touch=%s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, opts.touch, kind.tagKey())
+	if len(schema.Keys) == 0 {
+		var keyless []error
+		if opts.touch != "" {
+			keyless = append(keyless, fmt.Errorf("%s: touch=%s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, opts.touch, kind.tagKey()))
+		}
+		if opts.skipUnchanged {
+			keyless = append(keyless, fmt.Errorf("%s: skip_unchanged=true requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, kind.tagKey()))
+		}
+		if len(keyless) > 0 {
+			return nil, errors.Join(keyless...)
+		}
 	}
 	if opts.touch != "" {
 		if !sqldialect.ValidIdentifier(opts.touch) {
@@ -141,7 +153,7 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 			return nil, fmt.Errorf("%s: touch column name: %w", ctx, err)
 		}
 	}
-	t := &Table{Name: table, Prune: prune, Touch: opts.touch}
+	t := &Table{Name: table, Prune: prune, Touch: opts.touch, SkipUnchanged: opts.skipUnchanged}
 	var (
 		errs   []error
 		byName = map[string]string{}
@@ -229,8 +241,15 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	if len(t.Columns) == 0 && len(errs) == 0 {
 		errs = append(errs, fmt.Errorf("%s: table %s has no columns", ctx, table))
 	}
-	if opts.touch != "" && len(errs) == 0 && !t.updates() {
-		errs = append(errs, fmt.Errorf("%s: touch=%s has no effect: every column but the keys is %s or there is none, so existing rows are never updated", ctx, opts.touch, dbTagInsertOnly))
+	if len(errs) == 0 && !t.updates() {
+		for _, o := range []struct {
+			set  bool
+			name string
+		}{{opts.touch != "", "touch=" + opts.touch}, {opts.skipUnchanged, "skip_unchanged=true"}} {
+			if o.set {
+				errs = append(errs, fmt.Errorf("%s: %s has no effect: every column but the keys is %s or there is none, so existing rows are never updated", ctx, o.name, dbTagInsertOnly))
+			}
+		}
 	}
 	return t, errors.Join(errs...)
 }

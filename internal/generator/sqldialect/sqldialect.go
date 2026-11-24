@@ -42,6 +42,9 @@ type UpsertSpec struct {
 	// It is ignored when no column is updated (Updated is empty), since nothing is then updated:
 	// callers wanting the column to move must reject that case.
 	Touch string
+	// SkipUnchanged makes the update leave the rows whose updated columns already hold the values,
+	// which needs an equality operator for the types of these columns.
+	SkipUnchanged bool
 }
 
 // Updated returns the columns the update writes from the parameters: Cols without Keys and InsertOnly.
@@ -175,14 +178,24 @@ func (d postgres) Upsert(u UpsertSpec) string {
 	if len(updated) == 0 {
 		return stmt + "DO NOTHING"
 	}
-	var sets []string
+	var sets, olds, news []string
 	for _, c := range updated {
 		sets = append(sets, fmt.Sprintf("%s = EXCLUDED.%s", d.quote(c), d.quote(c)))
+		olds = append(olds, d.quote(upsertTarget)+"."+d.quote(c))
+		news = append(news, "EXCLUDED."+d.quote(c))
 	}
 	if u.Touch != "" {
 		sets = append(sets, d.quote(u.Touch)+" = CURRENT_TIMESTAMP")
 	}
-	return stmt + "DO UPDATE SET " + strings.Join(sets, ", ")
+	stmt += "DO UPDATE SET " + strings.Join(sets, ", ")
+	if u.SkipUnchanged {
+		if len(updated) == 1 {
+			stmt += fmt.Sprintf(" WHERE %s IS DISTINCT FROM %s", olds[0], news[0])
+		} else {
+			stmt += fmt.Sprintf(" WHERE (%s) IS DISTINCT FROM (%s)", strings.Join(olds, ", "), strings.Join(news, ", "))
+		}
+	}
+	return stmt
 }
 
 func (d postgres) DeleteExcept(table string, keys []string, rows int) string {

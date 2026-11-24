@@ -425,7 +425,7 @@ err = tx.Commit()
   writes:
 
   ```go
-  //datlas:master roles table=roles prune=false touch=updated_at
+  //datlas:master roles table=roles prune=false touch=updated_at skip_unchanged=true
   type RoleDefinition struct {
   	ID         string     `yaml:"id" master:"key"`
   	Label      string     `yaml:"label" db:",insertonly"` // written on insert only
@@ -436,6 +436,7 @@ err = tx.Commit()
   ```sql
   INSERT INTO "roles" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3)
   ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP
+  WHERE "datlas_target"."permission" IS DISTINCT FROM EXCLUDED."permission"
   ```
 
   - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
@@ -444,17 +445,29 @@ err = tx.Commit()
     only inserted. When every column but the keys is insert-only, existing rows are left alone
     (`DO NOTHING`).
   - `touch=<column>` sets the column to the current time when a row is updated. The column is not a field
-    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`). Every application updates
-    every existing row, so the column moves each time: it tells when the data was last applied, not when
-    the values of the row changed. It needs a logical key, since records without one are only inserted,
-    and a column that is updated: when every column but the keys is insert-only, rows are never updated,
-    which is an error.
+    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`). Unless `skip_unchanged=true`,
+    every application updates every existing row, so the column moves each time: it tells when the data
+    was last applied, not when the values of the row changed. It needs a logical key, since records
+    without one are only inserted, and a column that is updated: when every column but the keys is
+    insert-only, rows are never updated, which is an error.
     The value is `CURRENT_TIMESTAMP`, a `timestamptz` holding the start of the transaction. Applied
     through a `*sql.Tx`, every row of one application gets the same time; through a `*sql.DB`, each
     statement runs in a transaction of its own and gets its own time. Use a `timestamptz` column:
     PostgreSQL converts the value to the types it has an assignment cast to, so a `timestamp` column
     stores the local time of the session's `TimeZone` and `date`, `time` or `text` columns store a
     converted value, while other types, such as `integer`, fail when the data is applied.
+  - `skip_unchanged=true` leaves the rows whose updated columns already hold the values of the record,
+    so their touch column does not move and row-level update triggers do not fire for them (statement-level
+    triggers and `BEFORE INSERT` row triggers still do). It compares the columns with `IS DISTINCT FROM`,
+    which needs an equality operator for their types: use `jsonb`, not `json`; `xml`, `point` and
+    `polygon` fail too. The comparison is the equality of the type, not of the text written: `1.0` and
+    `1.00` in a `numeric` column, `1` and `1.0` in a `jsonb` number, or values differing only in case in
+    a `citext` column or under a nondeterministic collation are equal, so such a change of the record is
+    not written. Some types have an `=` that does not compare the values at all: `box` and `circle`
+    compare their areas and `path` its number of points, so a different shape counts as unchanged; do not
+    use `skip_unchanged` with them. The rows left alone are still locked until the end of the
+    transaction, as with `SELECT ... FOR UPDATE`, so writers to them wait for it. It needs a logical key, since records without one
+    are only inserted, and a column that is updated, like `touch`.
   - An empty `db` tag option is an error, including a trailing comma (`db:"name,"`), which is likely an
     option left out. Versions up to v0.1.0 accepted `db:"name,"` as the column name alone: drop the comma.
   - The statement aliases the table as `datlas_target`, so that a table named `excluded` does not clash
