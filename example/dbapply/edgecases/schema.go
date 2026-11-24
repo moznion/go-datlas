@@ -1,5 +1,6 @@
 // Package edgecases holds datasets exercising edge cases of the generated SQL
-// (an empty dataset, a schema-qualified table, records without a key); see ../dbapply_test.go.
+// (an empty dataset, a schema-qualified table, records without a key, an insert-only column of a table
+// shared with the application, a table named excluded); see ../dbapply_test.go.
 package edgecases
 
 //go:generate go tool datlas master -dir master
@@ -25,4 +26,28 @@ type Event struct {
 //datlas:seed tags table=tags prune=true
 type Tag struct {
 	Name string `yaml:"name" seed:"key"`
+}
+
+// Grade shares its table with rows the application creates (company_id set), so it does not prune.
+// Its label is written on insert only.
+//
+//datlas:master grades table=grades prune=false
+type Grade struct {
+	ID         string          `yaml:"id" master:"key"`
+	Label      string          `yaml:"label" db:",insertonly"`
+	Permission GradePermission `yaml:"permission"`
+}
+
+// Leftover is in a table named excluded, the name PostgreSQL gives the row proposed for insertion
+// in ON CONFLICT DO UPDATE.
+//
+//datlas:master leftovers table=excluded
+type Leftover struct {
+	Name  string `yaml:"name" master:"key"`
+	Value string `yaml:"value"`
+}
+
+// GradePermission is written to a jsonb column.
+type GradePermission struct {
+	Actions []string `yaml:"actions" json:"actions"`
 }

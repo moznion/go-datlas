@@ -17,8 +17,8 @@ type Dialect interface {
 	Name() string
 	// Insert inserts one row.
 	Insert(table string, cols []string) string
-	// Upsert inserts one row, or updates the row having the same keys. keys are a subset of cols.
-	Upsert(table string, cols, keys []string) string
+	// Upsert inserts one row, or updates the row having the same keys.
+	Upsert(u UpsertSpec) string
 	// DeleteExcept deletes the rows whose keys are none of the given rows of keys.
 	// It takes rows*len(keys) parameters, row by row; with no rows it deletes every row.
 	DeleteExcept(table string, keys []string, rows int) string
@@ -27,6 +27,35 @@ type Dialect interface {
 	// CheckIdentifier reports why name, a valid identifier (see ValidIdentifier) of a table,
 	// schema or column, is a mistake in this dialect, or returns nil.
 	CheckIdentifier(name string) error
+}
+
+// UpsertSpec describes an upsert statement.
+type UpsertSpec struct {
+	Table string
+	// Cols are the columns inserted, in the order of the parameters.
+	Cols []string
+	// Keys are the columns of Cols identifying a row, which the update leaves alone.
+	Keys []string
+	// InsertOnly are the columns of Cols written by the insert only: the update leaves them alone.
+	InsertOnly []string
+}
+
+// Updated returns the columns the update writes from the parameters: Cols without Keys and InsertOnly.
+func (u UpsertSpec) Updated() []string {
+	skip := map[string]bool{}
+	for _, c := range u.Keys {
+		skip[c] = true
+	}
+	for _, c := range u.InsertOnly {
+		skip[c] = true
+	}
+	var cols []string
+	for _, c := range u.Cols {
+		if !skip[c] {
+			cols = append(cols, c)
+		}
+	}
+	return cols
 }
 
 var dialects = map[string]Dialect{
@@ -129,22 +158,24 @@ func (d postgres) Insert(table string, cols []string) string {
 	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", d.quote(table), d.quoteAll(cols), d.params(1, len(cols)))
 }
 
-func (d postgres) Upsert(table string, cols, keys []string) string {
-	isKey := map[string]bool{}
-	for _, k := range keys {
-		isKey[k] = true
+// upsertTarget is the alias of the table an upsert writes. Without it, a table named "excluded" would be
+// ambiguous with EXCLUDED, the row proposed for insertion.
+const upsertTarget = "datlas_target"
+
+// Upsert updates the row with the same keys through ON CONFLICT, whose target must match a unique
+// constraint or index without a predicate. When no column is updated, it does nothing.
+func (d postgres) Upsert(u UpsertSpec) string {
+	updated := u.Updated()
+	stmt := fmt.Sprintf("INSERT INTO %s AS %s (%s) VALUES (%s) ON CONFLICT (%s) ",
+		d.quote(u.Table), d.quote(upsertTarget), d.quoteAll(u.Cols), d.params(1, len(u.Cols)), d.quoteAll(u.Keys))
+	if len(updated) == 0 {
+		return stmt + "DO NOTHING"
 	}
 	var sets []string
-	for _, c := range cols {
-		if !isKey[c] {
-			sets = append(sets, fmt.Sprintf("%s = EXCLUDED.%s", d.quote(c), d.quote(c)))
-		}
+	for _, c := range updated {
+		sets = append(sets, fmt.Sprintf("%s = EXCLUDED.%s", d.quote(c), d.quote(c)))
 	}
-	action := "DO NOTHING"
-	if len(sets) > 0 {
-		action = "DO UPDATE SET " + strings.Join(sets, ", ")
-	}
-	return fmt.Sprintf("%s ON CONFLICT (%s) %s", d.Insert(table, cols), d.quoteAll(keys), action)
+	return stmt + "DO UPDATE SET " + strings.Join(sets, ", ")
 }
 
 func (d postgres) DeleteExcept(table string, keys []string, rows int) string {

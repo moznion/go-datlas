@@ -268,8 +268,7 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 		var (
 			singular string
 			noConsts bool
-			table    string
-			prune    = kind == MasterData
+			tblOpts  = tableOptions{prune: kind == MasterData}
 			seenOpt  = map[string]bool{}
 		)
 		for _, opt := range d.Args[1:] {
@@ -285,11 +284,11 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 				seenOpt[k] = true
 				continue
 			case k == "table" && v != "":
-				table = v
+				tblOpts.name = v
 				seenOpt[k] = true
 				continue
 			case k == "prune" && (kind == MasterData && v == "false" || kind == SeedData && v == "true"):
-				prune = !prune
+				tblOpts.prune = !tblOpts.prune
 				seenOpt[k] = true
 				continue
 			}
@@ -327,8 +326,8 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 		}
 		var tbl *Table
 		switch {
-		case table != "":
-			if tbl, err = tableOf(kind, d, schema, table, prune, enums, dialect); err != nil {
+		case tblOpts.name != "":
+			if tbl, err = tableOf(kind, d, schema, tblOpts, enums, dialect); err != nil {
 				errs = append(errs, err)
 				continue
 			}

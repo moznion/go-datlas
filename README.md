@@ -421,6 +421,33 @@ err = tx.Commit()
 - Each record is upserted by its logical key (`INSERT ... ON CONFLICT (key) DO UPDATE`), so the key
   columns need a primary key or unique constraint. Records of seed data without a key are inserted,
   so applying them twice inserts them twice.
+- Updating rows: the update writes every column except the keys. Options of `db` tags narrow it:
+
+  ```go
+  //datlas:master roles table=roles prune=false
+  type RoleDefinition struct {
+  	ID         string     `yaml:"id" master:"key"`
+  	Label      string     `yaml:"label" db:",insertonly"` // written on insert only
+  	Permission Permission `yaml:"permission"`
+  }
+  ```
+
+  ```sql
+  INSERT INTO "roles" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3)
+  ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission"
+  ```
+
+  - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
+    the row is inserted and leaves it alone when the row is updated, e.g. a label users may rename.
+    Key fields cannot be insert-only, and the option needs a logical key, since records without one are
+    only inserted. When every column but the keys is insert-only, existing rows are left alone
+    (`DO NOTHING`).
+  - An empty `db` tag option is an error, including a trailing comma (`db:"name,"`), which is likely an
+    option left out. Versions up to v0.1.0 accepted `db:"name,"` as the column name alone: drop the comma.
+  - The statement aliases the table as `datlas_target`, so that a table named `excluded` does not clash
+    with `EXCLUDED`, the row proposed for insertion.
+  - The keys are the `ON CONFLICT` target, which must match a unique constraint or index without a
+    predicate: a partial unique index (`... WHERE company_id IS NULL`) is not matched.
 - **Prune**: after upserting, the rows whose keys are not in the data are deleted. Master data prunes
   by default (`prune=false` disables it); seed data prunes only with `prune=true`, since its tables
   usually hold rows the application creates too. A seed data environment without a file for the
