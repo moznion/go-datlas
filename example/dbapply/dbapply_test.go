@@ -158,9 +158,10 @@ func TestApplyPostgres(t *testing.T) {
 
 const edgeDDL = `
 DROP SCHEMA IF EXISTS config CASCADE;
-DROP TABLE IF EXISTS events, tags, grades;
+DROP TABLE IF EXISTS events, tags, grades, excluded;
 CREATE SCHEMA config;
 CREATE TABLE config.flags (name text PRIMARY KEY);
+CREATE TABLE excluded (name text PRIMARY KEY, value text NOT NULL);
 CREATE TABLE grades (
 	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL,
 	updated_at timestamptz NOT NULL DEFAULT now()
@@ -241,5 +242,23 @@ func TestApplyPostgresUpsertOptions(t *testing.T) {
 		if got := query[string](t, db, q); got != want {
 			t.Errorf("%s = %q, want %q", q, got, want)
 		}
+	}
+}
+
+// TestApplyPostgresTableNamedExcluded applies leftovers, whose table is named excluded like the row
+// ON CONFLICT DO UPDATE proposes for insertion, and checks that a changed value is restored.
+func TestApplyPostgresTableNamedExcluded(t *testing.T) {
+	db := openDB(t, edgeDDL)
+	if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE excluded SET value = 'changed'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if got := query[string](t, db, `SELECT value FROM excluded WHERE name = 'a'`); got != "kept" {
+		t.Errorf("value = %q, want kept", got)
 	}
 }

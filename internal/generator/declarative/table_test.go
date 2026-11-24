@@ -70,10 +70,10 @@ func TestApplyMasterData(t *testing.T) {
 	mustContain(t, src,
 		"func ApplyMasterData(ctx context.Context, db interface {",
 		"datlasMasterUpsertItems, datlasMasterUpsertPairs, datlasMasterPruneItems, }",
-		`INSERT INTO "app"."items" ("created_at", "id", "alias", "title", "price", "tags", "attrs", "ttl") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT ("id") DO UPDATE SET`,
+		`INSERT INTO "app"."items" AS "datlas_target" ("created_at", "id", "alias", "title", "price", "tags", "attrs", "ttl") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT ("id") DO UPDATE SET`,
 		`DELETE FROM "app"."items" WHERE "id" NOT IN ($1, $2)`,
 		`keys = append(keys, args[1])`,
-		`INSERT INTO "pairs" ("a", "b") VALUES ($1, $2) ON CONFLICT ("a", "b") DO NOTHING`,
+		`INSERT INTO "pairs" AS "datlas_target" ("a", "b") VALUES ($1, $2) ON CONFLICT ("a", "b") DO NOTHING`,
 		"datlasCol1, err := datlasRec.ID.MarshalText()",
 		"if datlasRec.Alias != nil {",
 		"&datlasRec.Price",
@@ -98,7 +98,7 @@ func TestApplyUpsertOptions(t *testing.T) {
 	}
 	testutil.TypeCheck(t, dir, ".")
 	mustContain(t, testutil.ReadFile(t, path),
-		`INSERT INTO "roles" ("id", "label", "role_name", "perm") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP`,
+		`INSERT INTO "roles" AS "datlas_target" ("id", "label", "role_name", "perm") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP`,
 	)
 }
 
@@ -111,7 +111,7 @@ func TestApplyOnlyInsertOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, testutil.ReadFile(t, path), `INSERT INTO "roles" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`)
+	mustContain(t, testutil.ReadFile(t, path), `INSERT INTO "roles" AS "datlas_target" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`)
 }
 
 func TestApplyMasterDataAbsentWithoutTables(t *testing.T) {

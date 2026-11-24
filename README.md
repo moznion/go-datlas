@@ -418,7 +418,7 @@ err = tx.Commit()
   ```
 
   ```sql
-  INSERT INTO "roles" ("id", "label", "permission") VALUES ($1, $2, $3)
+  INSERT INTO "roles" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3)
   ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP
   ```
 
@@ -438,6 +438,10 @@ err = tx.Commit()
     PostgreSQL converts the value to the types it has an assignment cast to, so a `timestamp` column
     stores the local time of the session's `TimeZone` and `date`, `time` or `text` columns store a
     converted value, while other types, such as `integer`, fail when the data is applied.
+  - An empty `db` tag option is an error, including a trailing comma (`db:"name,"`), which is likely an
+    option left out. Versions up to v0.1.0 accepted `db:"name,"` as the column name alone: drop the comma.
+  - The statement aliases the table as `datlas_target`, so that a table named `excluded` does not clash
+    with `EXCLUDED`, the row proposed for insertion.
   - The keys are the `ON CONFLICT` target, which must match a unique constraint or index without a
     predicate: a partial unique index (`... WHERE company_id IS NULL`) is not matched.
 - **Prune**: after upserting, the rows whose keys are not in the data are deleted. Master data prunes

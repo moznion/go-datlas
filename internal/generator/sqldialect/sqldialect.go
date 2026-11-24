@@ -162,11 +162,16 @@ func (d postgres) Insert(table string, cols []string) string {
 	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", d.quote(table), d.quoteAll(cols), d.params(1, len(cols)))
 }
 
+// upsertTarget is the alias of the table an upsert writes. Without it, a table named "excluded" would be
+// ambiguous with EXCLUDED, the row proposed for insertion.
+const upsertTarget = "datlas_target"
+
 // Upsert updates the row with the same keys through ON CONFLICT, whose target must match a unique
 // constraint or index without a predicate. When no column is updated, it does nothing.
 func (d postgres) Upsert(u UpsertSpec) string {
 	updated := u.Updated()
-	stmt := fmt.Sprintf("%s ON CONFLICT (%s) ", d.Insert(u.Table, u.Cols), d.quoteAll(u.Keys))
+	stmt := fmt.Sprintf("INSERT INTO %s AS %s (%s) VALUES (%s) ON CONFLICT (%s) ",
+		d.quote(u.Table), d.quote(upsertTarget), d.quoteAll(u.Cols), d.params(1, len(u.Cols)), d.quoteAll(u.Keys))
 	if len(updated) == 0 {
 		return stmt + "DO NOTHING"
 	}

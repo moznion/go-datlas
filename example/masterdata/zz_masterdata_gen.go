@@ -240,7 +240,7 @@ func datlasMasterUpsertRoles(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Roles() {
 		args, err := datlasMasterRowRoles(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "roles" ("code", "name") VALUES ($1, $2) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "roles" AS "datlas_target" ("code", "name") VALUES ($1, $2) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into roles: master data "roles" from roles.yaml, record`, i+1, err)
@@ -275,7 +275,7 @@ func datlasMasterUpsertPermissions(ctx context.Context, db datlasMasterDB) error
 	for i, datlasRec := range Permissions() {
 		args, err := datlasMasterRowPermissions(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "permissions" ("role", "action") VALUES ($1, $2) ON CONFLICT ("role", "action") DO NOTHING`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "permissions" AS "datlas_target" ("role", "action") VALUES ($1, $2) ON CONFLICT ("role", "action") DO NOTHING`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into permissions: master data "permissions" from permissions.yaml, record`, i+1, err)
@@ -322,7 +322,7 @@ func datlasMasterUpsertPlans(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Plans() {
 		args, err := datlasMasterRowPlans(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "plans" ("code", "name", "tier", "price_yen", "trial", "features", "regions", "description", "limits") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name", "tier" = EXCLUDED."tier", "price_yen" = EXCLUDED."price_yen", "trial" = EXCLUDED."trial", "features" = EXCLUDED."features", "regions" = EXCLUDED."regions", "description" = EXCLUDED."description", "limits" = EXCLUDED."limits"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "plans" AS "datlas_target" ("code", "name", "tier", "price_yen", "trial", "features", "regions", "description", "limits") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name", "tier" = EXCLUDED."tier", "price_yen" = EXCLUDED."price_yen", "trial" = EXCLUDED."trial", "features" = EXCLUDED."features", "regions" = EXCLUDED."regions", "description" = EXCLUDED."description", "limits" = EXCLUDED."limits"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into plans: master data "plans" from plans.yaml, record`, i+1, err)
@@ -361,7 +361,7 @@ func datlasMasterUpsertRegions(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Regions() {
 		args, err := datlasMasterRowRegions(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "regions" ("id", "code", "country", "name") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "code" = EXCLUDED."code", "country" = EXCLUDED."country", "name" = EXCLUDED."name"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "regions" AS "datlas_target" ("id", "code", "country", "name") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "code" = EXCLUDED."code", "country" = EXCLUDED."country", "name" = EXCLUDED."name"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into regions: master data "regions" from regions.yaml, record`, i+1, err)
