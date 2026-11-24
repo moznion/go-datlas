@@ -129,7 +129,7 @@ func datlasMasterUpsertGrades(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Grades() {
 		args, err := datlasMasterRowGrades(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "grades" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "grades" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP WHERE "grades"."permission" IS DISTINCT FROM EXCLUDED."permission"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into grades: master data "grades" from grades.yaml, record`, i+1, err)

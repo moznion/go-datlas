@@ -197,8 +197,8 @@ func TestApplyPostgresEdgeCases(t *testing.T) {
 	}
 }
 
-// TestApplyPostgresUpsertOptions applies grades, whose label is insert-only and whose updated_at moves
-// when a row is updated, to a table also holding rows of the application.
+// TestApplyPostgresUpsertOptions applies grades, whose label is insert-only and whose rows are updated,
+// with updated_at, only when the permission changes, to a table also holding rows of the application.
 func TestApplyPostgresUpsertOptions(t *testing.T) {
 	db := openDB(t, edgeDDL)
 	exec := func(stmts ...string) {
@@ -230,10 +230,10 @@ func TestApplyPostgresUpsertOptions(t *testing.T) {
 	for q, want := range map[string]string{
 		// The label is written on insert only, so the renamed one stays.
 		`SELECT string_agg(label, ',' ORDER BY label) FROM grades`: "Custom,Edited,Viewer",
-		// The changed permission is restored, and every row of the master data is touched.
+		// The changed permission is restored, and only that row is touched.
 		`SELECT permission::text FROM grades WHERE id = ` + viewer:                            `{"actions": ["read"]}`,
 		`SELECT (updated_at > '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + viewer: "true",
-		`SELECT (updated_at > '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + owner:  "true",
+		`SELECT (updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + owner:  "true",
 		// prune=false leaves the rows of the application.
 		`SELECT (updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE company_id = 'acme'`: "true",
 	} {

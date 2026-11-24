@@ -409,7 +409,7 @@ err = tx.Commit()
   `db` tags narrow it:
 
   ```go
-  //datlas:master roles table=roles prune=false touch=updated_at
+  //datlas:master roles table=roles prune=false touch=updated_at skip_unchanged=true
   type RoleDefinition struct {
   	ID         string     `yaml:"id" master:"key"`
   	Label      string     `yaml:"label" db:",insertonly"` // written on insert only
@@ -420,6 +420,7 @@ err = tx.Commit()
   ```sql
   INSERT INTO "roles" ("id", "label", "permission") VALUES ($1, $2, $3)
   ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP
+  WHERE "roles"."permission" IS DISTINCT FROM EXCLUDED."permission"
   ```
 
   - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
@@ -427,9 +428,11 @@ err = tx.Commit()
     Key fields cannot be insert-only. When every column but the keys is insert-only, existing rows are
     left alone (`DO NOTHING`).
   - `touch=<column>` sets the column to the current time when a row is updated. The column is not a field
-    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`). Every application updates
-    every existing row, so the column moves each time. It needs a logical key, since records without one
-    are only inserted.
+    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`).
+  - `skip_unchanged=true` leaves the rows whose updated columns already hold the values of the record,
+    so their touch column does not move and no update trigger fires. It compares the columns with
+    `IS DISTINCT FROM`, which needs an equality operator for their types: use `jsonb`, not `json`.
+  - Both options need a logical key, since records without one are only inserted.
   - The keys are the `ON CONFLICT` target, which must match a unique constraint or index without a
     predicate: a partial unique index (`... WHERE company_id IS NULL`) is not matched.
 - **Prune**: after upserting, the rows whose keys are not in the data are deleted. Master data prunes

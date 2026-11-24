@@ -28,9 +28,9 @@ type Tag struct {
 }
 
 // Grade shares its table with rows the application creates (company_id set), so it does not prune.
-// Its label is written on insert only, and updated_at moves when a row is updated.
+// Its label is written on insert only, and updated_at moves only when the permission changes.
 //
-//datlas:master grades table=grades prune=false touch=updated_at
+//datlas:master grades table=grades prune=false touch=updated_at skip_unchanged=true
 type Grade struct {
 	ID         string          `yaml:"id" master:"key"`
 	Label      string          `yaml:"label" db:",insertonly"`

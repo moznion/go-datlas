@@ -295,6 +295,10 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 				tblOpts.touch = v
 				seenOpt[k] = true
 				continue
+			case k == "skip_unchanged" && v == "true":
+				tblOpts.skipUnchanged = true
+				seenOpt[k] = true
+				continue
 			}
 			available := "singular=<Name>, table=<name>"
 			if kind == MasterData {
@@ -302,7 +306,7 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 			} else {
 				available += ", prune=true"
 			}
-			available += ", touch=<column>"
+			available += ", touch=<column>, skip_unchanged=true"
 			errs = append(errs, fmt.Errorf("%s: //datlas:%s: unknown or repeated option %q (available: %s)", d.Pos, kind.directive(), opt, available))
 		}
 		if !validDatasetName(name) {
@@ -338,7 +342,7 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 			}
 		default:
 			var orphan []string
-			for _, o := range []string{"prune", "touch"} {
+			for _, o := range []string{"prune", "touch", "skip_unchanged"} {
 				if seenOpt[o] {
 					orphan = append(orphan, o)
 				}
