@@ -94,14 +94,23 @@ func parseDBTag(tag string) (dbTag, error) {
 	if v == "-" {
 		return dbTag{skip: true}, nil
 	}
-	name, opts, _ := strings.Cut(v, ",")
+	name, opts, hasOpts := strings.Cut(v, ",")
 	t := dbTag{name: name}
-	if opts == "" {
+	if !hasOpts {
 		return t, nil
 	}
+	if name == "-" {
+		return dbTag{}, fmt.Errorf("%q excludes the field, which takes no options; use %s:\"-\" alone", v, DBTagKey)
+	}
 	for _, o := range strings.Split(opts, ",") {
-		if o != dbTagInsertOnly || t.insertOnly {
-			return dbTag{}, fmt.Errorf("unknown or repeated %s tag option %q (available: %s)", DBTagKey, o, dbTagInsertOnly)
+		switch {
+		case o == "":
+			// A trailing or doubled comma is likely an option left out, e.g. `db:"label,"`.
+			return dbTag{}, fmt.Errorf("empty %s tag option in %q (available: %s)", DBTagKey, v, dbTagInsertOnly)
+		case o != dbTagInsertOnly:
+			return dbTag{}, fmt.Errorf("unknown %s tag option %q (available: %s)", DBTagKey, o, dbTagInsertOnly)
+		case t.insertOnly:
+			return dbTag{}, fmt.Errorf("repeated %s tag option %q", DBTagKey, o)
 		}
 		t.insertOnly = true
 	}
@@ -125,13 +134,15 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 		return nil, fmt.Errorf("%s: prune=true requires a logical key (`%s:\"key\"`) to tell the records of the dataset", ctx, kind.tagKey())
 	}
 	if len(schema.Keys) == 0 {
-		for _, o := range []struct {
-			name string
-			set  bool
-		}{{"touch=<column>", opts.touch != ""}, {"skip_unchanged=true", opts.skipUnchanged}} {
-			if o.set {
-				return nil, fmt.Errorf("%s: %s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, o.name, kind.tagKey())
-			}
+		var keyless []error
+		if opts.touch != "" {
+			keyless = append(keyless, fmt.Errorf("%s: touch=%s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, opts.touch, kind.tagKey()))
+		}
+		if opts.skipUnchanged {
+			keyless = append(keyless, fmt.Errorf("%s: skip_unchanged=true requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", ctx, kind.tagKey()))
+		}
+		if len(keyless) > 0 {
+			return nil, errors.Join(keyless...)
 		}
 	}
 	if opts.touch != "" {
@@ -147,6 +158,9 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 		errs   []error
 		byName = map[string]string{}
 		byVar  = map[*types.Var]int{}
+		// excluded are the fields excluded with `db:"-"`. Other fields missing from byVar were rejected
+		// with an error of their own.
+		excluded = map[*types.Var]bool{}
 	)
 	var walk func(st *types.Struct, path string)
 	walk = func(st *types.Struct, path string) {
@@ -159,11 +173,16 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 				errs = append(errs, fmt.Errorf("%s: %w", fctx, err))
 				continue
 			case tag.skip:
+				excluded[f.v] = true
 				continue
 			}
 			name := tag.name
 			if f.tag.inline {
-				if name != "" || tag.insertOnly {
+				if tag.insertOnly {
+					errs = append(errs, fmt.Errorf("%s: %s cannot be set on an inline struct, which has no column of its own; set it on its fields instead", fctx, dbTagInsertOnly))
+					continue
+				}
+				if name != "" {
 					errs = append(errs, fmt.Errorf("%s: an inline struct has no column of its own; tag its fields instead", fctx))
 					continue
 				}
@@ -195,6 +214,10 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 				errs = append(errs, fmt.Errorf("%s: %w", fctx, err))
 				continue
 			}
+			if tag.insertOnly && len(schema.Keys) == 0 {
+				errs = append(errs, fmt.Errorf("%s: %s requires a logical key (`%s:\"key\"`): records without one are inserted, never updated", fctx, dbTagInsertOnly, kind.tagKey()))
+				continue
+			}
 			col.InsertOnly = tag.insertOnly
 			byVar[f.v] = len(t.Columns)
 			t.Columns = append(t.Columns, col)
@@ -204,7 +227,9 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	for _, k := range schema.Keys {
 		i, ok := byVar[k]
 		if !ok {
-			errs = append(errs, fmt.Errorf("%s.%s: a logical key field cannot be excluded from the table", ctx, k.Name()))
+			if excluded[k] {
+				errs = append(errs, fmt.Errorf("%s.%s: a logical key field cannot be excluded from the table", ctx, k.Name()))
+			}
 			continue
 		}
 		if t.Columns[i].InsertOnly {
@@ -216,7 +241,32 @@ func tableOf(kind Kind, d loader.Directive, schema Schema, opts tableOptions, en
 	if len(t.Columns) == 0 && len(errs) == 0 {
 		errs = append(errs, fmt.Errorf("%s: table %s has no columns", ctx, table))
 	}
+	if len(errs) == 0 && !t.updates() {
+		for _, o := range []struct {
+			set  bool
+			name string
+		}{{opts.touch != "", "touch=" + opts.touch}, {opts.skipUnchanged, "skip_unchanged=true"}} {
+			if o.set {
+				errs = append(errs, fmt.Errorf("%s: %s has no effect: every column but the keys is %s or there is none, so existing rows are never updated", ctx, o.name, dbTagInsertOnly))
+			}
+		}
+	}
 	return t, errors.Join(errs...)
+}
+
+// updates reports whether the upsert of the table updates a column of existing rows:
+// a column that is neither a key nor insert-only.
+func (t *Table) updates() bool {
+	isKey := map[int]bool{}
+	for _, k := range t.Keys {
+		isKey[k] = true
+	}
+	for i, c := range t.Columns {
+		if !isKey[i] && !c.InsertOnly {
+			return true
+		}
+	}
+	return false
 }
 
 // columnOf decides how the values of a field of type t are passed to the database.

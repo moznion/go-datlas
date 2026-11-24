@@ -1,5 +1,7 @@
 // Package edgecases holds datasets exercising edge cases of the generated SQL
-// (an empty dataset, a schema-qualified table, records without a key); see ../dbapply_test.go.
+// (an empty dataset, a schema-qualified table, records without a key, an insert-only column of a table
+// shared with the application, a table named excluded, touch and skip_unchanged, also on a
+// schema-qualified table); see ../dbapply_test.go.
 package edgecases
 
 import "time"
@@ -37,6 +39,23 @@ type Grade struct {
 	ID         string          `yaml:"id" master:"key"`
 	Label      string          `yaml:"label" db:",insertonly"`
 	Permission GradePermission `yaml:"permission"`
+}
+
+// Setting is in a schema-qualified table, which the condition of skip_unchanged refers to.
+//
+//datlas:master settings table=config.settings skip_unchanged=true
+type Setting struct {
+	Name  string `yaml:"name" master:"key"`
+	Value string `yaml:"value"`
+}
+
+// Leftover is in a table named excluded, the name PostgreSQL gives the row proposed for insertion
+// in ON CONFLICT DO UPDATE.
+//
+//datlas:master leftovers table=excluded
+type Leftover struct {
+	Name  string `yaml:"name" master:"key"`
+	Value string `yaml:"value"`
 }
 
 // GradePermission is written to a jsonb column.

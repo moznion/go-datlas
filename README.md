@@ -27,6 +27,22 @@ datlas requires Go 1.26. Generated fixture factories import
 always resolved to the same version. `fixturekit` itself uses only the standard library.
 Generated master and seed data have no dependencies at all.
 
+### Prebuilt binaries
+
+Each [GitHub Release](https://github.com/moznion/go-datlas/releases) also ships prebuilt binaries
+for Linux, macOS and Windows (amd64 and arm64), named `datlas-<tag>-<os>-<arch>.tar.gz` (`.zip` on
+Windows), each with a `.sha256` checksum. Their build provenance is attested, so you can check that
+an archive was built from this repository's release workflow:
+
+```sh
+gh attestation verify datlas-<tag>-<os>-<arch>.tar.gz --repo moznion/go-datlas \
+  --signer-workflow moznion/go-datlas/.github/workflows/release-build.yml
+```
+
+A prebuilt binary is not tied to your module's `go.mod`, so keep its version in line with the
+`github.com/moznion/go-datlas` version your module requires for `fixturekit`. `go get -tool` does
+that for you.
+
 ## Commands
 
 ```
@@ -405,8 +421,8 @@ err = tx.Commit()
 - Each record is upserted by its logical key (`INSERT ... ON CONFLICT (key) DO UPDATE`), so the key
   columns need a primary key or unique constraint. Records of seed data without a key are inserted,
   so applying them twice inserts them twice.
-- Updating rows: the update writes every column except the keys. Options of the directive and of
-  `db` tags narrow it:
+- Updating rows: the update writes every column except the keys. The options below change what it
+  writes:
 
   ```go
   //datlas:master roles table=roles prune=false touch=updated_at skip_unchanged=true
@@ -418,21 +434,44 @@ err = tx.Commit()
   ```
 
   ```sql
-  INSERT INTO "roles" ("id", "label", "permission") VALUES ($1, $2, $3)
+  INSERT INTO "roles" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3)
   ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP
-  WHERE "roles"."permission" IS DISTINCT FROM EXCLUDED."permission"
+  WHERE "datlas_target"."permission" IS DISTINCT FROM EXCLUDED."permission"
   ```
 
   - `db:"<column>,insertonly"` (or `db:",insertonly"` for the default column name) writes the column when
     the row is inserted and leaves it alone when the row is updated, e.g. a label users may rename.
-    Key fields cannot be insert-only. When every column but the keys is insert-only, existing rows are
-    left alone (`DO NOTHING`).
+    Key fields cannot be insert-only, and the option needs a logical key, since records without one are
+    only inserted. When every column but the keys is insert-only, existing rows are left alone
+    (`DO NOTHING`).
   - `touch=<column>` sets the column to the current time when a row is updated. The column is not a field
-    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`).
+    of the schema: on insert it takes its default value (e.g. `DEFAULT now()`). Unless `skip_unchanged=true`,
+    every application updates every existing row, so the column moves each time: it tells when the data
+    was last applied, not when the values of the row changed. It needs a logical key, since records
+    without one are only inserted, and a column that is updated: when every column but the keys is
+    insert-only, rows are never updated, which is an error.
+    The value is `CURRENT_TIMESTAMP`, a `timestamptz` holding the start of the transaction. Applied
+    through a `*sql.Tx`, every row of one application gets the same time; through a `*sql.DB`, each
+    statement runs in a transaction of its own and gets its own time. Use a `timestamptz` column:
+    PostgreSQL converts the value to the types it has an assignment cast to, so a `timestamp` column
+    stores the local time of the session's `TimeZone` and `date`, `time` or `text` columns store a
+    converted value, while other types, such as `integer`, fail when the data is applied.
   - `skip_unchanged=true` leaves the rows whose updated columns already hold the values of the record,
-    so their touch column does not move and no update trigger fires. It compares the columns with
-    `IS DISTINCT FROM`, which needs an equality operator for their types: use `jsonb`, not `json`.
-  - Both options need a logical key, since records without one are only inserted.
+    so their touch column does not move and row-level update triggers do not fire for them (statement-level
+    triggers and `BEFORE INSERT` row triggers still do). It compares the columns with `IS DISTINCT FROM`,
+    which needs an equality operator for their types: use `jsonb`, not `json`; `xml`, `point` and
+    `polygon` fail too. The comparison is the equality of the type, not of the text written: `1.0` and
+    `1.00` in a `numeric` column, `1` and `1.0` in a `jsonb` number, or values differing only in case in
+    a `citext` column or under a nondeterministic collation are equal, so such a change of the record is
+    not written. Some types have an `=` that does not compare the values at all: `box` and `circle`
+    compare their areas and `path` its number of points, so a different shape counts as unchanged; do not
+    use `skip_unchanged` with them. The rows left alone are still locked until the end of the
+    transaction, as with `SELECT ... FOR UPDATE`, so writers to them wait for it. It needs a logical key, since records without one
+    are only inserted, and a column that is updated, like `touch`.
+  - An empty `db` tag option is an error, including a trailing comma (`db:"name,"`), which is likely an
+    option left out. Versions up to v0.1.0 accepted `db:"name,"` as the column name alone: drop the comma.
+  - The statement aliases the table as `datlas_target`, so that a table named `excluded` does not clash
+    with `EXCLUDED`, the row proposed for insertion.
   - The keys are the `ON CONFLICT` target, which must match a unique constraint or index without a
     predicate: a partial unique index (`... WHERE company_id IS NULL`) is not matched.
 - **Prune**: after upserting, the rows whose keys are not in the data are deleted. Master data prunes
@@ -458,6 +497,10 @@ err = tx.Commit()
 
   Pointers to any of them write `NULL` when nil. Values JSON cannot hold fail generation: maps with
   `bool` keys, and NaN and infinities in JSON columns.
+- Logical keys are never `NULL`: key fields cannot be pointers. A `NULL` key would match no row, so the
+  record would be inserted again on every apply and prune would delete nothing. Since the `Value`
+  method of a `driver.Valuer` key only runs when applying, the Apply functions fail on a record
+  whose key `Value` returns nil (`logical key Code is NULL ...`) before writing it.
 - Table and column names are quoted in statements, which makes them case-sensitive in PostgreSQL, while
   unquoted names in DDL are folded to lower case. Names with upper-case letters therefore fail
   generation; give lower-case column names with `db` tags (`db:"user_id"` for a YAML key `userId`).

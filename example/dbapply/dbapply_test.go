@@ -158,9 +158,11 @@ func TestApplyPostgres(t *testing.T) {
 
 const edgeDDL = `
 DROP SCHEMA IF EXISTS config CASCADE;
-DROP TABLE IF EXISTS events, tags, grades, notes;
+DROP TABLE IF EXISTS events, tags, grades, excluded, notes;
 CREATE SCHEMA config;
 CREATE TABLE config.flags (name text PRIMARY KEY);
+CREATE TABLE config.settings (name text PRIMARY KEY, value text NOT NULL);
+CREATE TABLE excluded (name text PRIMARY KEY, value text NOT NULL);
 CREATE TABLE grades (
 	id uuid PRIMARY KEY DEFAULT gen_random_uuid(), label text NOT NULL, company_id text, permission jsonb NOT NULL,
 	updated_at timestamptz NOT NULL DEFAULT now()
@@ -235,11 +237,53 @@ func TestApplyPostgresUpsertOptions(t *testing.T) {
 		`SELECT permission::text FROM grades WHERE id = ` + viewer:                            `{"actions": ["read"]}`,
 		`SELECT (updated_at > '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + viewer: "true",
 		`SELECT (updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE id = ` + owner:  "true",
-		// prune=false leaves the rows of the application.
-		`SELECT (updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE company_id = 'acme'`: "true",
+		// prune=false leaves the rows of the application, untouched.
+		`SELECT count(*)::text FROM grades WHERE company_id = 'acme'`:                                      "1",
+		`SELECT bool_and(updated_at = '2000-01-01T00:00:00Z')::text FROM grades WHERE company_id = 'acme'`: "true",
 	} {
 		if got := query[string](t, db, q); got != want {
 			t.Errorf("%s = %q, want %q", q, got, want)
 		}
+	}
+}
+
+// TestApplyPostgresSkipUnchangedQualified applies settings, in a schema-qualified table with skip_unchanged=true:
+// the changed row is restored, and the unchanged one is not rewritten (its xmin, the transaction that wrote it, stays).
+func TestApplyPostgresSkipUnchangedQualified(t *testing.T) {
+	db := openDB(t, edgeDDL)
+	if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE config.settings SET value = 'light' WHERE name = 'theme'`); err != nil {
+		t.Fatal(err)
+	}
+	const xmin = `SELECT xmin::text FROM config.settings WHERE name = 'locale'`
+	before := query[string](t, db, xmin)
+	if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if got := query[string](t, db, `SELECT value FROM config.settings WHERE name = 'theme'`); got != "dark" {
+		t.Errorf("theme = %q, want dark", got)
+	}
+	if after := query[string](t, db, xmin); after != before {
+		t.Errorf("the unchanged row was rewritten: xmin %s -> %s", before, after)
+	}
+}
+
+// TestApplyPostgresTableNamedExcluded applies leftovers, whose table is named excluded like the row
+// ON CONFLICT DO UPDATE proposes for insertion, and checks that a changed value is restored.
+func TestApplyPostgresTableNamedExcluded(t *testing.T) {
+	db := openDB(t, edgeDDL)
+	if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `UPDATE excluded SET value = 'changed'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := edgecases.ApplyMasterData(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	if got := query[string](t, db, `SELECT value FROM excluded WHERE name = 'a'`); got != "kept" {
+		t.Errorf("value = %q, want kept", got)
 	}
 }

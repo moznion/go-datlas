@@ -131,7 +131,11 @@ func TestDiffPostgresEdgeCases(t *testing.T) {
 	want := []string{
 		"insert grades (" + owner + "): grades.yaml #1",
 		"insert grades (" + viewer + "): grades.yaml #2",
+		// A table named excluded and a schema-qualified one are compared like the others.
+		"insert excluded (a): leftovers.yaml #1",
 		"insert notes (n1): notes.yaml #1",
+		"insert config.settings (locale): settings.yaml #1",
+		"insert config.settings (theme): settings.yaml #2",
 		// An empty dataset deletes every row, of a schema-qualified table too.
 		"delete config.flags (stale)",
 		// Records without a key are always inserted.
@@ -170,8 +174,11 @@ func TestDiffPostgresEdgeCases(t *testing.T) {
 	want = []string{
 		"unchanged grades (" + owner + "): grades.yaml #1",
 		"update grades (" + viewer + "): grades.yaml #2: permission",
+		"unchanged excluded (a): leftovers.yaml #1",
 		// The score and the time are compared once rounded as the columns store them.
 		"unchanged notes (n1): notes.yaml #1",
+		"unchanged config.settings (locale): settings.yaml #1",
+		"unchanged config.settings (theme): settings.yaml #2",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("changes:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -188,7 +195,9 @@ func TestDiffPostgresEdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := mc[2].String(), "update notes (n1): notes.yaml #1: score, body"; got != want {
+	if i := slices.IndexFunc(mc, func(c edgecases.MasterDataChange) bool { return c.Table == "notes" }); i < 0 {
+		t.Error("no change of notes")
+	} else if got, want := mc[i].String(), "update notes (n1): notes.yaml #1: score, body"; got != want {
 		t.Errorf("change = %q, want %q", got, want)
 	}
 }

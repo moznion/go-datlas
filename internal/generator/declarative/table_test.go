@@ -71,10 +71,10 @@ func TestApplyMasterData(t *testing.T) {
 	mustContain(t, src,
 		"func ApplyMasterData(ctx context.Context, db interface {",
 		"datlasMasterUpsertItems, datlasMasterUpsertPairs, datlasMasterPruneItems, }",
-		`INSERT INTO "app"."items" ("created_at", "id", "alias", "title", "price", "tags", "attrs", "ttl") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT ("id") DO UPDATE SET`,
+		`INSERT INTO "app"."items" AS "datlas_target" ("created_at", "id", "alias", "title", "price", "tags", "attrs", "ttl") VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT ("id") DO UPDATE SET`,
 		`DELETE FROM "app"."items" WHERE "id" NOT IN ($1, $2)`,
 		`keys = append(keys, args[1])`,
-		`INSERT INTO "pairs" ("a", "b") VALUES ($1, $2) ON CONFLICT ("a", "b") DO NOTHING`,
+		`INSERT INTO "pairs" AS "datlas_target" ("a", "b") VALUES ($1, $2) ON CONFLICT ("a", "b") DO NOTHING`,
 		"datlasCol1, err := datlasRec.ID.MarshalText()",
 		"if datlasRec.Alias != nil {",
 		"&datlasRec.Price",
@@ -99,8 +99,20 @@ func TestApplyUpsertOptions(t *testing.T) {
 	}
 	testutil.TypeCheck(t, dir, ".")
 	mustContain(t, testutil.ReadFile(t, path),
-		`INSERT INTO "roles" ("id", "label", "role_name", "perm") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP WHERE "roles"."perm" IS DISTINCT FROM EXCLUDED."perm"`,
+		`INSERT INTO "roles" AS "datlas_target" ("id", "label", "role_name", "perm") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm", "updated_at" = CURRENT_TIMESTAMP WHERE "datlas_target"."perm" IS DISTINCT FROM EXCLUDED."perm"`,
 	)
+}
+
+// TestApplyOnlyInsertOnly checks that a dataset whose columns but the keys are all insert-only
+// leaves existing rows alone.
+func TestApplyOnlyInsertOnly(t *testing.T) {
+	schema := "package data\n\n//datlas:master roles table=roles prune=false\ntype R struct {\n" +
+		"\tID string `yaml:\"id\" master:\"key\"`\n\tLabel string `yaml:\"label\" db:\",insertonly\"`\n}\n"
+	path, err := generate(t, MasterData, map[string]string{"schema.go": schema, "roles.yaml": "- {id: a, label: A}\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, testutil.ReadFile(t, path), `INSERT INTO "roles" AS "datlas_target" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`)
 }
 
 func TestApplyMasterDataAbsentWithoutTables(t *testing.T) {
@@ -177,8 +189,15 @@ func TestTableErrors(t *testing.T) {
 		{name: "prune without table", files: master("//datlas:master roles prune=false", ""), want: "prune has no effect without table=<name>"},
 		{name: "duplicate column", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"code\"`\n"), want: `column "code" is also used by Code`},
 		{name: "invalid column", files: master("//datlas:master roles table=r", "\tName string `yaml:\"the-name\"`\n"), want: `invalid column name "the-name"`},
-		{name: "db tag options", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,omitempty\"`\n"), want: `unknown or repeated db tag option "omitempty" (available: insertonly)`},
-		{name: "repeated insertonly", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\",insertonly,insertonly\"`\n"), want: `unknown or repeated db tag option "insertonly"`},
+		{name: "db tag options", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,omitempty\"`\n"), want: `unknown db tag option "omitempty" (available: insertonly)`},
+		{name: "repeated insertonly", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\",insertonly,insertonly\"`\n"), want: `repeated db tag option "insertonly"`},
+		{name: "excluded with options", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"-,insertonly\"`\n"), want: `"-,insertonly" excludes the field, which takes no options`},
+		{name: "trailing comma", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,\"`\n"), want: `empty db tag option in "name," (available: insertonly)`},
+		{name: "trailing comma after insertonly", files: master("//datlas:master roles table=r", "\tName string `yaml:\"name\" db:\"name,insertonly,\"`\n"), want: `empty db tag option in "name,insertonly,"`},
+		{name: "insertonly keyless seed", kind: SeedData, files: map[string]string{
+			"schema.go":         "package data\n\n//datlas:seed events table=events\ntype E struct {\n\tA string `db:\",insertonly\"`\n}\n",
+			"local/events.yaml": "[]\n",
+		}, want: "E.A: insertonly requires a logical key"},
 		{name: "insertonly key", files: map[string]string{
 			"schema.go":  "package data\n\n//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\" db:\",insertonly\"`\n\tName string `yaml:\"name\"`\n}\n",
 			"roles.yaml": "[]\n",
@@ -186,8 +205,14 @@ func TestTableErrors(t *testing.T) {
 		{name: "insertonly inline", files: map[string]string{
 			"schema.go":  "package data\n\ntype B struct {\n\tX string `yaml:\"x\"`\n}\n\n//datlas:master roles table=r\ntype R struct {\n\tB `yaml:\",inline\" db:\",insertonly\"`\n\tCode string `yaml:\"code\" master:\"key\"`\n}\n",
 			"roles.yaml": "[]\n",
-		}, want: "an inline struct has no column of its own"},
-		{name: "touch without table", files: master("//datlas:master roles touch=updated_at skip_unchanged=true", ""), want: "touch, skip_unchanged has no effect without table=<name>"},
+		}, want: "R.B: insertonly cannot be set on an inline struct"},
+		{name: "inline with a column name", files: map[string]string{
+			"schema.go":  "package data\n\ntype B struct {\n\tX string `yaml:\"x\"`\n}\n\n//datlas:master roles table=r\ntype R struct {\n\tB `yaml:\",inline\" db:\"b\"`\n\tCode string `yaml:\"code\" master:\"key\"`\n}\n",
+			"roles.yaml": "[]\n",
+		}, want: "R.B: an inline struct has no column of its own"},
+		{name: "touch without table", files: master("//datlas:master roles touch=updated_at", ""), want: "touch has no effect without table=<name>"},
+		{name: "options without table", files: master("//datlas:master roles touch=updated_at skip_unchanged=true", ""), want: "touch, skip_unchanged have no effect without table=<name>"},
+		{name: "prune and touch without table", files: master("//datlas:master roles prune=false touch=updated_at", ""), want: "prune, touch have no effect without table=<name>"},
 		{name: "empty touch", files: master("//datlas:master roles table=r touch=", ""), want: `unknown or repeated option "touch="`},
 		{name: "skip_unchanged=false", files: master("//datlas:master roles table=r skip_unchanged=false", ""), want: `unknown or repeated option "skip_unchanged=false"`},
 		{name: "invalid touch", files: master("//datlas:master roles table=r touch=a-b", ""), want: `invalid touch column name "a-b"`},
@@ -196,11 +221,15 @@ func TestTableErrors(t *testing.T) {
 		{name: "touch keyless seed", kind: SeedData, files: map[string]string{
 			"schema.go":         "package data\n\n//datlas:seed events table=events touch=updated_at\ntype E struct {\n\tA string\n}\n",
 			"local/events.yaml": "[]\n",
-		}, want: "touch=<column> requires a logical key"},
+		}, want: "touch=updated_at requires a logical key"},
 		{name: "skip_unchanged keyless seed", kind: SeedData, files: map[string]string{
 			"schema.go":         "package data\n\n//datlas:seed events table=events skip_unchanged=true\ntype E struct {\n\tA string\n}\n",
 			"local/events.yaml": "[]\n",
 		}, want: "skip_unchanged=true requires a logical key"},
+		{name: "touch with only insert-only columns", files: master("//datlas:master roles table=r touch=updated_at", "\tName string `yaml:\"name\" db:\",insertonly\"`\n"), want: "touch=updated_at has no effect: every column but the keys is insertonly or there is none"},
+		{name: "touch with only keys", files: master("//datlas:master roles table=r touch=updated_at", ""), want: "touch=updated_at has no effect"},
+		{name: "skip_unchanged with only insert-only columns", files: master("//datlas:master roles table=r skip_unchanged=true", "\tName string `yaml:\"name\" db:\",insertonly\"`\n"), want: "skip_unchanged=true has no effect: every column but the keys is insertonly or there is none"},
+		{name: "skip_unchanged with only keys", files: master("//datlas:master roles table=r skip_unchanged=true", ""), want: "skip_unchanged=true has no effect"},
 		{name: "excluded key", files: map[string]string{
 			"schema.go":  "package data\n\n//datlas:master roles table=r\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\" db:\"-\"`\n\tName string `yaml:\"name\"`\n}\n",
 			"roles.yaml": "[]\n",
@@ -287,4 +316,27 @@ func TestImportNamesUnchanged(t *testing.T) {
 	}
 	mustContain(t, testutil.ReadFile(t, path), `"example.com/datlastest/keys"`, `RoleCodeA keys.K = "a"`)
 	testutil.TypeCheck(t, filepath.Dir(path), ".")
+}
+
+// TestTouchKeyColumnError checks that a key field whose column is the touch column gets that error only,
+// not also the error of an excluded key.
+func TestTouchKeyColumnError(t *testing.T) {
+	_, err := generate(t, MasterData, map[string]string{
+		"schema.go":  "package data\n\n//datlas:master roles table=r touch=code\ntype R struct {\n\tCode string `yaml:\"code\" master:\"key\"`\n\tName string `yaml:\"name\"`\n}\n",
+		"roles.yaml": "[]\n",
+	})
+	mustFail(t, err, `R.Code: column "code" is the touch column`)
+	if strings.Contains(err.Error(), "cannot be excluded") {
+		t.Errorf("error also says the key is excluded: %v", err)
+	}
+}
+
+// TestKeylessOptionsErrors checks that a dataset without a key reports both touch and skip_unchanged at once.
+func TestKeylessOptionsErrors(t *testing.T) {
+	_, err := generate(t, SeedData, map[string]string{
+		"schema.go":         "package data\n\n//datlas:seed events table=events touch=updated_at skip_unchanged=true\ntype E struct {\n\tA string\n}\n",
+		"local/events.yaml": "[]\n",
+	})
+	mustFail(t, err, "touch=updated_at requires a logical key")
+	mustFail(t, err, "skip_unchanged=true requires a logical key")
 }

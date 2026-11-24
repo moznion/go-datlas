@@ -176,7 +176,7 @@ func datlasSeedUpsertDemoCompanies(ctx context.Context, db datlasSeedDB) error {
 	for i, datlasRec := range DemoCompanies() {
 		args, err := datlasSeedRowCompanies(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "companies" ("key", "name") VALUES ($1, $2) ON CONFLICT ("key") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "companies" AS "datlas_target" ("key", "name") VALUES ($1, $2) ON CONFLICT ("key") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into companies: seed data "companies" (environment "demo") from demo/companies.yaml, record`, i+1, err)
@@ -252,7 +252,7 @@ func datlasSeedUpsertLocalCompanies(ctx context.Context, db datlasSeedDB) error 
 	for i, datlasRec := range LocalCompanies() {
 		args, err := datlasSeedRowCompanies(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "companies" ("key", "name") VALUES ($1, $2) ON CONFLICT ("key") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "companies" AS "datlas_target" ("key", "name") VALUES ($1, $2) ON CONFLICT ("key") DO UPDATE SET "name" = EXCLUDED."name"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into companies: seed data "companies" (environment "local") from local/companies.yaml, record`, i+1, err)
@@ -333,7 +333,7 @@ func datlasSeedUpsertDemoUsers(ctx context.Context, db datlasSeedDB) error {
 	for i, datlasRec := range DemoUsers() {
 		args, err := datlasSeedRowUsers(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "users" ("email", "company", "role", "joined_at") VALUES ($1, $2, $3, $4) ON CONFLICT ("email") DO UPDATE SET "company" = EXCLUDED."company", "role" = EXCLUDED."role", "joined_at" = EXCLUDED."joined_at"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "users" AS "datlas_target" ("email", "company", "role", "joined_at") VALUES ($1, $2, $3, $4) ON CONFLICT ("email") DO UPDATE SET "company" = EXCLUDED."company", "role" = EXCLUDED."role", "joined_at" = EXCLUDED."joined_at"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into users: seed data "users" (environment "demo") from demo/users.yaml, record`, i+1, err)
@@ -372,7 +372,7 @@ func datlasSeedUpsertLocalUsers(ctx context.Context, db datlasSeedDB) error {
 	for i, datlasRec := range LocalUsers() {
 		args, err := datlasSeedRowUsers(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "users" ("email", "company", "role", "joined_at") VALUES ($1, $2, $3, $4) ON CONFLICT ("email") DO UPDATE SET "company" = EXCLUDED."company", "role" = EXCLUDED."role", "joined_at" = EXCLUDED."joined_at"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "users" AS "datlas_target" ("email", "company", "role", "joined_at") VALUES ($1, $2, $3, $4) ON CONFLICT ("email") DO UPDATE SET "company" = EXCLUDED."company", "role" = EXCLUDED."role", "joined_at" = EXCLUDED."joined_at"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into users: seed data "users" (environment "local") from local/users.yaml, record`, i+1, err)

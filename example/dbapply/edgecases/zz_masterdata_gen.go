@@ -16,7 +16,7 @@ import (
 // Datasets without an order between them are in name order. Datasets referring to each other
 // in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
 func MasterDatasets() []string {
-	return []string{"flags", "grades", "notes"}
+	return []string{"flags", "grades", "leftovers", "notes", "settings"}
 }
 
 // Flags returns the master data "flags", compiled from flags.yaml.
@@ -82,6 +82,81 @@ func datlasMasterGrades1() Grade {
 	}
 }
 
+// Logical keys of Settings (Name).
+const (
+	SettingNameLocale string = "locale"
+	SettingNameTheme  string = "theme"
+)
+
+// Settings returns the master data "settings", compiled from settings.yaml.
+// Each call returns a new copy that the caller may modify freely.
+func Settings() []Setting {
+	return []Setting{
+		datlasMasterSettings0(),
+		datlasMasterSettings1(),
+	}
+}
+
+// SettingByName returns the record of Settings whose Name equals the given value.
+// Each call returns a new copy.
+//
+//datlas:keys settings
+func SettingByName(key string) (Setting, bool) {
+	switch key {
+	case "locale":
+		return datlasMasterSettings0(), true
+	case "theme":
+		return datlasMasterSettings1(), true
+	}
+	return Setting{}, false
+}
+
+func datlasMasterSettings0() Setting {
+	return Setting{
+		Name:  "locale",
+		Value: "ja",
+	}
+}
+
+func datlasMasterSettings1() Setting {
+	return Setting{
+		Name:  "theme",
+		Value: "dark",
+	}
+}
+
+// Logical keys of Leftovers (Name).
+const (
+	LeftoverNameA string = "a"
+)
+
+// Leftovers returns the master data "leftovers", compiled from leftovers.yaml.
+// Each call returns a new copy that the caller may modify freely.
+func Leftovers() []Leftover {
+	return []Leftover{
+		datlasMasterLeftovers0(),
+	}
+}
+
+// LeftoverByName returns the record of Leftovers whose Name equals the given value.
+// Each call returns a new copy.
+//
+//datlas:keys leftovers
+func LeftoverByName(key string) (Leftover, bool) {
+	switch key {
+	case "a":
+		return datlasMasterLeftovers0(), true
+	}
+	return Leftover{}, false
+}
+
+func datlasMasterLeftovers0() Leftover {
+	return Leftover{
+		Name:  "a",
+		Value: "kept",
+	}
+}
+
 // Logical keys of Notes (ID).
 const (
 	NoteIDN1 string = "n1"
@@ -126,7 +201,7 @@ func datlasMasterUpsertFlags(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Flags() {
 		args, err := datlasMasterRowFlags(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "config"."flags" ("name") VALUES ($1) ON CONFLICT ("name") DO NOTHING`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "config"."flags" AS "datlas_target" ("name") VALUES ($1) ON CONFLICT ("name") DO NOTHING`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into config.flags: master data "flags" from flags.yaml, record`, i+1, err)
@@ -211,7 +286,7 @@ func datlasMasterUpsertGrades(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Grades() {
 		args, err := datlasMasterRowGrades(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "grades" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP WHERE "grades"."permission" IS DISTINCT FROM EXCLUDED."permission"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "grades" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission", "updated_at" = CURRENT_TIMESTAMP WHERE "datlas_target"."permission" IS DISTINCT FROM EXCLUDED."permission"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into grades: master data "grades" from grades.yaml, record`, i+1, err)
@@ -245,6 +320,168 @@ func datlasMasterdiffUpsertGrades(ctx context.Context, db datlasMasterdiffDB) ([
 	return changes, nil
 }
 
+// datlasMasterRowSettings returns the values of the columns of table config.settings for a record.
+func datlasMasterRowSettings(datlasRec Setting) ([]any, error) {
+	return []any{datlasRec.Name, datlasRec.Value}, nil
+}
+
+// datlasMasterUpsertSettings applies the records of Settings to table config.settings.
+func datlasMasterUpsertSettings(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Settings() {
+		args, err := datlasMasterRowSettings(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "config"."settings" AS "datlas_target" ("name", "value") VALUES ($1, $2) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value" WHERE "datlas_target"."value" IS DISTINCT FROM EXCLUDED."value"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into config.settings: master data "settings" from settings.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterPruneSettings deletes the rows of table config.settings whose keys are not in Settings.
+func datlasMasterPruneSettings(ctx context.Context, db datlasMasterDB) error {
+	var keys []any
+	for i, datlasRec := range Settings() {
+		args, err := datlasMasterRowSettings(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune config.settings: master data "settings" from settings.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "config"."settings" WHERE "name" NOT IN ($1, $2)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune config.settings: master data "settings" from settings.yaml`, err)
+	}
+	return nil
+}
+
+// datlasMasterdiffUpsertSettings reports what datlasMasterUpsertSettings does to the rows of table config.settings.
+func datlasMasterdiffUpsertSettings(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Settings()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"config"."settings"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."name" AS text), "datlas_t"."name" IS NOT NULL, CAST("datlas_t"."value" AS %[2]s) IS DISTINCT FROM "datlas_v"."value" FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s))) AS "datlas_v" ("name", "value") LEFT JOIN "config"."settings" AS "datlas_t" ON "datlas_t"."name" = "datlas_v"."name"`, "name", "value")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff config.settings: master data "settings" from settings.yaml`, err)
+	}
+	var changes []MasterDataChange
+	for i, datlasRec := range records {
+		args, err := datlasMasterRowSettings(datlasRec)
+		change := MasterDataChange{Table: "config.settings", Dataset: "settings", Source: "settings.yaml", Record: i + 1}
+		if err == nil {
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 1, []string{"value"}, args[0], args[1])
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff config.settings: master data "settings" from settings.yaml`, i+1, err)
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
+// datlasMasterdiffPruneSettings reports the rows of table config.settings that datlasMasterPruneSettings deletes.
+func datlasMasterdiffPruneSettings(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	var keys []any
+	for i, datlasRec := range Settings() {
+		args, err := datlasMasterRowSettings(datlasRec)
+		if err != nil {
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff prune config.settings: master data "settings" from settings.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	stale, err := datlasMasterdiffStale(ctx, db, `SELECT CAST("name" AS text) FROM "config"."settings" WHERE "name" NOT IN ($1, $2) ORDER BY "name"`, 1, keys...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff prune config.settings: master data "settings" from settings.yaml`, err)
+	}
+	var changes []MasterDataChange
+	for _, key := range stale {
+		changes = append(changes, MasterDataChange{Op: MasterDataDelete, Table: "config.settings", Dataset: "settings", Source: "settings.yaml", Key: key})
+	}
+	return changes, nil
+}
+
+// datlasMasterRowLeftovers returns the values of the columns of table excluded for a record.
+func datlasMasterRowLeftovers(datlasRec Leftover) ([]any, error) {
+	return []any{datlasRec.Name, datlasRec.Value}, nil
+}
+
+// datlasMasterUpsertLeftovers applies the records of Leftovers to table excluded.
+func datlasMasterUpsertLeftovers(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Leftovers() {
+		args, err := datlasMasterRowLeftovers(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "excluded" AS "datlas_target" ("name", "value") VALUES ($1, $2) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into excluded: master data "leftovers" from leftovers.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterPruneLeftovers deletes the rows of table excluded whose keys are not in Leftovers.
+func datlasMasterPruneLeftovers(ctx context.Context, db datlasMasterDB) error {
+	var keys []any
+	for i, datlasRec := range Leftovers() {
+		args, err := datlasMasterRowLeftovers(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune excluded: master data "leftovers" from leftovers.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "excluded" WHERE "name" NOT IN ($1)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune excluded: master data "leftovers" from leftovers.yaml`, err)
+	}
+	return nil
+}
+
+// datlasMasterdiffUpsertLeftovers reports what datlasMasterUpsertLeftovers does to the rows of table excluded.
+func datlasMasterdiffUpsertLeftovers(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	records := Leftovers()
+	if len(records) == 0 {
+		return nil, nil
+	}
+	query, err := datlasMasterdiffQuery(ctx, db, `SELECT a.attname, CASE WHEN a.atttypid = 'json'::regtype THEN 'jsonb' ELSE format_type(a.atttypid, a.atttypmod) END FROM pg_catalog.pg_attribute AS a WHERE a.attrelid = CAST('"excluded"' AS regclass) AND a.attnum > 0 AND NOT a.attisdropped`, `SELECT CAST("datlas_v"."name" AS text), "datlas_t"."name" IS NOT NULL, CAST("datlas_t"."value" AS %[2]s) IS DISTINCT FROM "datlas_v"."value" FROM (VALUES (CAST($1 AS %[1]s), CAST($2 AS %[2]s))) AS "datlas_v" ("name", "value") LEFT JOIN "excluded" AS "datlas_t" ON "datlas_t"."name" = "datlas_v"."name"`, "name", "value")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff excluded: master data "leftovers" from leftovers.yaml`, err)
+	}
+	var changes []MasterDataChange
+	for i, datlasRec := range records {
+		args, err := datlasMasterRowLeftovers(datlasRec)
+		change := MasterDataChange{Table: "excluded", Dataset: "leftovers", Source: "leftovers.yaml", Record: i + 1}
+		if err == nil {
+			change.Key, change.Op, change.Columns, err = datlasMasterdiffCompare(ctx, db, query, 1, []string{"value"}, args[0], args[1])
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff excluded: master data "leftovers" from leftovers.yaml`, i+1, err)
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
+// datlasMasterdiffPruneLeftovers reports the rows of table excluded that datlasMasterPruneLeftovers deletes.
+func datlasMasterdiffPruneLeftovers(ctx context.Context, db datlasMasterdiffDB) ([]MasterDataChange, error) {
+	var keys []any
+	for i, datlasRec := range Leftovers() {
+		args, err := datlasMasterRowLeftovers(datlasRec)
+		if err != nil {
+			return nil, fmt.Errorf("%s, record #%d: %w", `datlas: diff prune excluded: master data "leftovers" from leftovers.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	stale, err := datlasMasterdiffStale(ctx, db, `SELECT CAST("name" AS text) FROM "excluded" WHERE "name" NOT IN ($1) ORDER BY "name"`, 1, keys...)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", `datlas: diff prune excluded: master data "leftovers" from leftovers.yaml`, err)
+	}
+	var changes []MasterDataChange
+	for _, key := range stale {
+		changes = append(changes, MasterDataChange{Op: MasterDataDelete, Table: "excluded", Dataset: "leftovers", Source: "leftovers.yaml", Key: key})
+	}
+	return changes, nil
+}
+
 // datlasMasterRowNotes returns the values of the columns of table notes for a record.
 func datlasMasterRowNotes(datlasRec Note) ([]any, error) {
 	datlasCol3, err := json.Marshal(datlasRec.Body)
@@ -259,7 +496,7 @@ func datlasMasterUpsertNotes(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Notes() {
 		args, err := datlasMasterRowNotes(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "notes" ("id", "score", "at", "body") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "score" = EXCLUDED."score", "at" = EXCLUDED."at", "body" = EXCLUDED."body"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "notes" AS "datlas_target" ("id", "score", "at", "body") VALUES ($1, $2, $3, $4) ON CONFLICT ("id") DO UPDATE SET "score" = EXCLUDED."score", "at" = EXCLUDED."at", "body" = EXCLUDED."body"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into notes: master data "notes" from notes.yaml, record`, i+1, err)
@@ -308,7 +545,11 @@ func ApplyMasterData(ctx context.Context, db interface {
 	for _, step := range []func(context.Context, datlasMasterDB) error{
 		datlasMasterUpsertFlags,
 		datlasMasterUpsertGrades,
+		datlasMasterUpsertLeftovers,
 		datlasMasterUpsertNotes,
+		datlasMasterUpsertSettings,
+		datlasMasterPruneSettings,
+		datlasMasterPruneLeftovers,
 		datlasMasterPruneFlags,
 	} {
 		if err := step(ctx, db); err != nil {
@@ -506,7 +747,11 @@ func DiffMasterData(ctx context.Context, db interface {
 	steps := []func(context.Context, datlasMasterdiffDB) ([]MasterDataChange, error){
 		datlasMasterdiffUpsertFlags,
 		datlasMasterdiffUpsertGrades,
+		datlasMasterdiffUpsertLeftovers,
 		datlasMasterdiffUpsertNotes,
+		datlasMasterdiffUpsertSettings,
+		datlasMasterdiffPruneSettings,
+		datlasMasterdiffPruneLeftovers,
 		datlasMasterdiffPruneFlags,
 	}
 	var changes []MasterDataChange

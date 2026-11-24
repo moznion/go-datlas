@@ -392,10 +392,13 @@ dialects implement one interface in the generator, so others can be added withou
 
 - Records are upserted by their logical key; records without one are inserted.
 - The update writes the values of the record, except for columns the application owns after the insert
-  (`db:",insertonly"`, e.g. labels users rename). `touch=<column>` records when a row was updated, and
-  `skip_unchanged=true` leaves the rows already holding the values, so that the touch column means
-  "the master data changed this row". Skipping is an option, because it compares the columns, which
-  types without an equality operator (`json`) cannot do.
+  (`db:",insertonly"`, e.g. labels users rename). `touch=<column>` sets a column to the time of the
+  application on every existing row the upsert updates, and `skip_unchanged=true` leaves the rows already
+  holding the values, so that together the touch column means "the master data changed this row".
+  Skipping is an option, because it compares the columns, which types without an equality operator
+  (`json`, `xml`, `point`, `polygon`) cannot do, and which some types do by something else than their
+  values (`box` and `circle` by area, `path` by number of points). It compares by the equality of the
+  types, so values equal but written differently (`1.0` and `1.00` as `numeric`) are left as they are.
 - Master Data is the specification, so rows whose keys are not in it are deleted (prune), unless
   `prune=false`. Seed data tables also hold rows the application creates, so seed data prunes only
   with `prune=true`.

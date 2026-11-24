@@ -348,7 +348,11 @@ func analyze(kind Kind, pkg *packages.Package, directives []loader.Directive, en
 				}
 			}
 			if len(orphan) > 0 {
-				errs = append(errs, fmt.Errorf("%s: //datlas:%s: %s has no effect without table=<name>", d.Pos, kind.directive(), strings.Join(orphan, ", ")))
+				verb := "has"
+				if len(orphan) > 1 {
+					verb = "have"
+				}
+				errs = append(errs, fmt.Errorf("%s: //datlas:%s: %s %s no effect without table=<name>", d.Pos, kind.directive(), strings.Join(orphan, ", "), verb))
 				continue
 			}
 		}
