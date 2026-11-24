@@ -10,14 +10,17 @@ func TestPostgres(t *testing.T) {
 	tests := []struct{ got, want string }{
 		{d.Insert("app.users", []string{"email", "name"}), `INSERT INTO "app"."users" ("email", "name") VALUES ($1, $2)`},
 		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"code", "name"}, Keys: []string{"code"}}),
-			`INSERT INTO "roles" ("code", "name") VALUES ($1, $2) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name"`},
+			`INSERT INTO "roles" AS "datlas_target" ("code", "name") VALUES ($1, $2) ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name"`},
 		{d.Upsert(UpsertSpec{Table: "perms", Cols: []string{"role", "action"}, Keys: []string{"role", "action"}}),
-			`INSERT INTO "perms" ("role", "action") VALUES ($1, $2) ON CONFLICT ("role", "action") DO NOTHING`},
+			`INSERT INTO "perms" AS "datlas_target" ("role", "action") VALUES ($1, $2) ON CONFLICT ("role", "action") DO NOTHING`},
+		// A table named excluded does not clash with EXCLUDED, thanks to the alias.
+		{d.Upsert(UpsertSpec{Table: "excluded", Cols: []string{"k", "v"}, Keys: []string{"k"}}),
+			`INSERT INTO "excluded" AS "datlas_target" ("k", "v") VALUES ($1, $2) ON CONFLICT ("k") DO UPDATE SET "v" = EXCLUDED."v"`},
 		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "label", "perm"}, Keys: []string{"id"}, InsertOnly: []string{"label"}}),
-			`INSERT INTO "roles" ("id", "label", "perm") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm"`},
+			`INSERT INTO "roles" AS "datlas_target" ("id", "label", "perm") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "perm" = EXCLUDED."perm"`},
 		// Every column but the key is insert-only: nothing to update.
 		{d.Upsert(UpsertSpec{Table: "roles", Cols: []string{"id", "label"}, Keys: []string{"id"}, InsertOnly: []string{"label"}}),
-			`INSERT INTO "roles" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`},
+			`INSERT INTO "roles" AS "datlas_target" ("id", "label") VALUES ($1, $2) ON CONFLICT ("id") DO NOTHING`},
 		{d.DeleteExcept("roles", []string{"code"}, 0), `DELETE FROM "roles"`},
 		{d.DeleteExcept("roles", []string{"code"}, 2), `DELETE FROM "roles" WHERE "code" NOT IN ($1, $2)`},
 		{d.DeleteExcept("perms", []string{"role", "action"}, 2),

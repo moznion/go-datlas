@@ -112,7 +112,7 @@ func datlasSeedUpsertLocalTags(ctx context.Context, db datlasSeedDB) error {
 	for i, datlasRec := range LocalTags() {
 		args, err := datlasSeedRowTags(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "tags" ("name") VALUES ($1) ON CONFLICT ("name") DO NOTHING`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "tags" AS "datlas_target" ("name") VALUES ($1) ON CONFLICT ("name") DO NOTHING`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into tags: seed data "tags" (environment "local") from local/tags.yaml, record`, i+1, err)

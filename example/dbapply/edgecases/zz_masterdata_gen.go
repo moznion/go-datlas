@@ -14,7 +14,7 @@ import (
 // Datasets without an order between them are in name order. Datasets referring to each other
 // in a cycle are adjacent, in name order. References of a dataset to itself are not considered.
 func MasterDatasets() []string {
-	return []string{"flags", "grades"}
+	return []string{"flags", "grades", "leftovers"}
 }
 
 // Flags returns the master data "flags", compiled from flags.yaml.
@@ -80,6 +80,38 @@ func datlasMasterGrades1() Grade {
 	}
 }
 
+// Logical keys of Leftovers (Name).
+const (
+	LeftoverNameA string = "a"
+)
+
+// Leftovers returns the master data "leftovers", compiled from leftovers.yaml.
+// Each call returns a new copy that the caller may modify freely.
+func Leftovers() []Leftover {
+	return []Leftover{
+		datlasMasterLeftovers0(),
+	}
+}
+
+// LeftoverByName returns the record of Leftovers whose Name equals the given value.
+// Each call returns a new copy.
+//
+//datlas:keys leftovers
+func LeftoverByName(key string) (Leftover, bool) {
+	switch key {
+	case "a":
+		return datlasMasterLeftovers0(), true
+	}
+	return Leftover{}, false
+}
+
+func datlasMasterLeftovers0() Leftover {
+	return Leftover{
+		Name:  "a",
+		Value: "kept",
+	}
+}
+
 // datlasMasterRowFlags returns the values of the columns of table config.flags for a record.
 func datlasMasterRowFlags(datlasRec Flag) ([]any, error) {
 	return []any{datlasRec.Name}, nil
@@ -90,7 +122,7 @@ func datlasMasterUpsertFlags(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Flags() {
 		args, err := datlasMasterRowFlags(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "config"."flags" ("name") VALUES ($1) ON CONFLICT ("name") DO NOTHING`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "config"."flags" AS "datlas_target" ("name") VALUES ($1) ON CONFLICT ("name") DO NOTHING`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into config.flags: master data "flags" from flags.yaml, record`, i+1, err)
@@ -129,11 +161,46 @@ func datlasMasterUpsertGrades(ctx context.Context, db datlasMasterDB) error {
 	for i, datlasRec := range Grades() {
 		args, err := datlasMasterRowGrades(datlasRec)
 		if err == nil {
-			_, err = db.ExecContext(ctx, `INSERT INTO "grades" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission"`, args...)
+			_, err = db.ExecContext(ctx, `INSERT INTO "grades" AS "datlas_target" ("id", "label", "permission") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "permission" = EXCLUDED."permission"`, args...)
 		}
 		if err != nil {
 			return fmt.Errorf("%s #%d: %w", `datlas: upsert into grades: master data "grades" from grades.yaml, record`, i+1, err)
 		}
+	}
+	return nil
+}
+
+// datlasMasterRowLeftovers returns the values of the columns of table excluded for a record.
+func datlasMasterRowLeftovers(datlasRec Leftover) ([]any, error) {
+	return []any{datlasRec.Name, datlasRec.Value}, nil
+}
+
+// datlasMasterUpsertLeftovers applies the records of Leftovers to table excluded.
+func datlasMasterUpsertLeftovers(ctx context.Context, db datlasMasterDB) error {
+	for i, datlasRec := range Leftovers() {
+		args, err := datlasMasterRowLeftovers(datlasRec)
+		if err == nil {
+			_, err = db.ExecContext(ctx, `INSERT INTO "excluded" AS "datlas_target" ("name", "value") VALUES ($1, $2) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`, args...)
+		}
+		if err != nil {
+			return fmt.Errorf("%s #%d: %w", `datlas: upsert into excluded: master data "leftovers" from leftovers.yaml, record`, i+1, err)
+		}
+	}
+	return nil
+}
+
+// datlasMasterPruneLeftovers deletes the rows of table excluded whose keys are not in Leftovers.
+func datlasMasterPruneLeftovers(ctx context.Context, db datlasMasterDB) error {
+	var keys []any
+	for i, datlasRec := range Leftovers() {
+		args, err := datlasMasterRowLeftovers(datlasRec)
+		if err != nil {
+			return fmt.Errorf("%s, record #%d: %w", `datlas: prune excluded: master data "leftovers" from leftovers.yaml`, i+1, err)
+		}
+		keys = append(keys, args[0])
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM "excluded" WHERE "name" NOT IN ($1)`, keys...); err != nil {
+		return fmt.Errorf("%s: %w", `datlas: prune excluded: master data "leftovers" from leftovers.yaml`, err)
 	}
 	return nil
 }
@@ -153,6 +220,8 @@ func ApplyMasterData(ctx context.Context, db interface {
 	for _, step := range []func(context.Context, datlasMasterDB) error{
 		datlasMasterUpsertFlags,
 		datlasMasterUpsertGrades,
+		datlasMasterUpsertLeftovers,
+		datlasMasterPruneLeftovers,
 		datlasMasterPruneFlags,
 	} {
 		if err := step(ctx, db); err != nil {
